@@ -496,10 +496,13 @@ class PointSyncService:
             existing_kv_tags = ace_point.get("kv_tags") or {}
             updated_kv_tags = {**existing_kv_tags, self.HAYSTACK_REF_TAG: sky_id}
 
-            # Create updated point dict with all original data plus haystackRef
+            # Create minimal point update with required fields
+            # Note: Do NOT include bacnet_data as it may contain empty strings that cause backend errors
             updated_point = {
-                **ace_point,  # Include all original point data
-                "kv_tags": updated_kv_tags,  # Override with updated kv_tags
+                "name": ace_point["name"],
+                "client": ace_point["client"],
+                "site": ace_point["site"],
+                "kv_tags": updated_kv_tags,
             }
 
             points_to_update.append(updated_point)
