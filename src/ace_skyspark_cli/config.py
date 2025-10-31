@@ -68,7 +68,11 @@ class SkySparkConfig(BaseSettings):
         if not v.startswith(("http://", "https://")):
             msg = "SkySpark URL must start with http:// or https://"
             raise ValueError(msg)
-        return v.rstrip("/") + "/api"
+        # Only add /api if not already present
+        v = v.rstrip("/")
+        if not v.endswith("/api"):
+            v = v + "/api"
+        return v
 
     @field_validator("project", "user")
     @classmethod
