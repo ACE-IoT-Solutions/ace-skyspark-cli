@@ -130,6 +130,7 @@ class PointSyncService:
             # Process each ACE point
             points_to_create: list[Point] = []
             points_to_update: list[Point] = []
+            ace_points_to_create: list[dict[str, Any]] = []  # Track original ACE dicts
 
             for ace_point in ace_points:
                 try:
@@ -146,6 +147,7 @@ class PointSyncService:
                         # Point doesn't exist - prepare create
                         new_point = self._prepare_point_create(ace_point)
                         points_to_create.append(new_point)
+                        ace_points_to_create.append(ace_point)  # Keep original ACE dict
 
                 except Exception as e:
                     error_msg = f"Error processing point {ace_point.get('name', 'unknown')}: {e!s}"
@@ -158,7 +160,7 @@ class PointSyncService:
                     created = await self._create_points_batch(points_to_create)
                     result.points_created += len(created)
                     # Store haystackRef back to ACE
-                    await self._store_refs_to_ace(points_to_create, created)
+                    await self._store_refs_to_ace(ace_points_to_create, created)
 
                 if points_to_update:
                     updated = await self._update_points_batch(points_to_update)
@@ -372,7 +374,7 @@ class PointSyncService:
 
     async def _store_refs_to_ace(
         self,
-        ace_points: list[Point],
+        ace_points: list[dict[str, Any]],
         skyspark_points: list[dict[str, Any]],
     ) -> None:
         """Store SkySpark IDs back to ACE as haystackRef tags.
@@ -380,10 +382,12 @@ class PointSyncService:
         This ensures idempotency by linking ACE points to SkySpark entities.
 
         Args:
-            ace_points: Original ACE points
+            ace_points: Original ACE point dictionaries
             skyspark_points: Created SkySpark points with IDs
         """
         logger.info("storing_refs_to_ace", count=len(skyspark_points))
+
+        loop = asyncio.get_event_loop()
 
         for ace_point, sky_point in zip(ace_points, skyspark_points, strict=False):
             try:
@@ -394,14 +398,20 @@ class PointSyncService:
                     logger.warning("no_id_in_skyspark_point", point=ace_point.get("name", "unknown"))
                     continue
 
-                # Update ACE point with haystackRef
-                # This would call ACE API to update the point's KV tags
-                # Example: await self.ace_client.update_point_tags(
-                #     point_id=ace_point["id"],
-                #     kv_tags={self.HAYSTACK_REF_TAG: sky_id}
-                # )
+                # Update ACE point with haystackRef in kv_tags
+                point_name = ace_point["name"]
+                existing_kv_tags = ace_point.get("kv_tags") or {}
+                updated_kv_tags = {**existing_kv_tags, self.HAYSTACK_REF_TAG: sky_id}
 
-                logger.debug("stored_ref", ace_point=ace_point.get("name"), skyspark_id=sky_id)
+                # ACE API client is synchronous, run in thread pool
+                await loop.run_in_executor(
+                    None,
+                    self.ace_client.update_point,
+                    point_name,
+                    {"kv_tags": updated_kv_tags},
+                )
+
+                logger.debug("stored_ref", ace_point=point_name, skyspark_id=sky_id)
 
             except Exception as e:
                 logger.error("store_ref_failed", point=ace_point.get("name", "unknown"), error=str(e))
