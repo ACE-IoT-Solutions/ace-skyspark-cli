@@ -159,10 +159,14 @@ class PointSyncService:
                 logger.info("processing_points", count=total_points)
 
             # Step 2: Sync equipment entities (extract from points)
-            equipment_ref_map, equip_created_count, equip_skipped_count = await self._sync_equipment(
-                site_name, site_ref, ace_points, dry_run
-            )
+            (
+                equipment_ref_map,
+                equip_created_count,
+                equip_updated_count,
+                equip_skipped_count,
+            ) = await self._sync_equipment(site_name, site_ref, ace_points, dry_run)
             result.equipment_created += equip_created_count
+            result.equipment_updated += equip_updated_count
             result.equipment_skipped += equip_skipped_count
 
             # Fetch existing SkySpark points to check for matches
@@ -183,13 +187,12 @@ class PointSyncService:
                     haystack_ref = self._get_haystack_ref(ace_point)
 
                     if haystack_ref and haystack_ref in skyspark_ref_map:
-                        # Point exists - prepare update
+                        # Point exists - prepare update (will fix refs if needed)
                         sky_point = skyspark_ref_map[haystack_ref]
                         updated_point = self._prepare_point_update(
                             ace_point, sky_point, site_ref, equipment_ref_map
                         )
                         points_to_update.append(updated_point)
-                        result.points_skipped += 1
                     else:
                         # Point doesn't exist - prepare create
                         new_point = self._prepare_point_create(ace_point, site_ref, equipment_ref_map)
@@ -401,7 +404,7 @@ class PointSyncService:
         site_ref: str,
         ace_points: list[dict[str, Any]],
         dry_run: bool,
-    ) -> tuple[dict[str, str], int, int]:
+    ) -> tuple[dict[str, str], int, int, int]:
         """Synchronize equipment entities to SkySpark.
 
         Extracts unique equipment from points' bacnet_data and creates equipment entities.
@@ -413,10 +416,11 @@ class PointSyncService:
             dry_run: If True, don't make any changes
 
         Returns:
-            Tuple of (equipment_ref_map, created_count, skipped_count)
+            Tuple of (equipment_ref_map, created_count, updated_count, skipped_count)
             - equipment_ref_map: Dictionary mapping equipment identifier to SkySpark equipment ref
             - created_count: Number of equipment entities created
-            - skipped_count: Number of equipment entities that already existed
+            - updated_count: Number of equipment entities updated
+            - skipped_count: Number of equipment entities that already existed and didn't need updates
         """
         logger.info("syncing_equipment", site=site_name)
 
@@ -447,12 +451,12 @@ class PointSyncService:
         logger.info("equipment_extracted", count=len(equipment_map))
 
         if not equipment_map:
-            return ({}, 0, 0)
+            return ({}, 0, 0, 0)
 
         if dry_run:
             logger.info("dry_run_would_create_equipment", count=len(equipment_map))
             dry_run_map = {key: f"dry-run-equip-{key}" for key in equipment_map}
-            return (dry_run_map, len(equipment_map), 0)
+            return (dry_run_map, len(equipment_map), 0, 0)
 
         # Check for existing equipment in SkySpark by refName
         try:
@@ -471,23 +475,73 @@ class PointSyncService:
             logger.warning("failed_to_check_existing_equipment", error=str(e))
             existing_equip_map = {}
 
-        # Determine which equipment needs to be created
+        # Determine which equipment needs to be created or updated
         equipment_to_create: list[Equipment] = []
+        equipment_to_update: list[Equipment] = []
         equip_keys_to_create: list[str] = []
+        equip_keys_to_update: list[str] = []
         equip_ref_map: dict[str, str] = {}
+
+        # Also need to check existing equipment's siteRef - may need updating if orphaned
+        existing_equipment_full = {equip.get("refName", ""): equip for equip in existing_equipment}
 
         for equip_info in equipment_map.values():
             equip_key = equip_info["key"]
+            ref_name = f"ace-equip-{equip_key}"
 
             # Check if equipment already exists
             if equip_key in existing_equip_map:
-                equip_ref_map[equip_key] = existing_equip_map[equip_key]
-                logger.debug("equipment_already_exists", key=equip_key, ref=existing_equip_map[equip_key])
+                equip_id = existing_equip_map[equip_key]
+                equip_ref_map[equip_key] = equip_id
+
+                # Check if siteRef needs updating (orphaned or wrong site)
+                existing_equip = existing_equipment_full.get(ref_name, {})
+                existing_site_ref = existing_equip.get("siteRef", {})
+                if isinstance(existing_site_ref, dict):
+                    existing_site_ref_val = existing_site_ref.get("val", "").lstrip("@")
+                else:
+                    existing_site_ref_val = str(existing_site_ref).lstrip("@")
+
+                if existing_site_ref_val != site_ref:
+                    # Need to update this equipment's siteRef
+                    logger.info(
+                        "equipment_needs_siteref_update",
+                        key=equip_key,
+                        old_site=existing_site_ref_val,
+                        new_site=site_ref,
+                    )
+                    # Get existing equipment tags (excluding system fields)
+                    existing_tags = {}
+                    for key, val in existing_equip.items():
+                        # Skip system fields that shouldn't be in updates (keep mod for optimistic locking)
+                        if key not in {"id", "dis", "refName", "siteRef", "equipRef", "equip", "tz"}:
+                            existing_tags[key] = val
+
+                    # Merge with our required tags
+                    updated_tags = {
+                        **existing_tags,
+                        "ace_device_key": equip_key,
+                        "bacnet": True,
+                        "device_address": equip_info["device_address"],
+                        "device_id": equip_info["device_id"],
+                    }
+
+                    equipment_entity = Equipment(
+                        id=equip_id,
+                        dis=equip_info["device_name"],
+                        refName=ref_name,
+                        siteRef=site_ref,
+                        tags=updated_tags,
+                    )
+                    equipment_to_update.append(equipment_entity)
+                    equip_keys_to_update.append(equip_key)
+                else:
+                    logger.debug("equipment_already_exists", key=equip_key, ref=equip_id)
             else:
                 # Need to create this equipment
                 equipment_entity = Equipment(
                     dis=equip_info["device_name"],
-                    refName=f"ace-equip-{equip_key}",
+                    refName=ref_name,
                     siteRef=site_ref,
                     tags={
                         "ace_device_key": equip_key,
@@ -499,13 +553,23 @@ class PointSyncService:
                 equipment_to_create.append(equipment_entity)
                 equip_keys_to_create.append(equip_key)
 
-        # Create new equipment if needed
-        skipped_count = len(existing_equip_map)
+        # Update equipment with wrong siteRef
+        updated_count = 0
+        if equipment_to_update:
+            try:
+                updated_equipment = await self.skyspark_client.update_equipment(equipment_to_update)
+                updated_count = len(updated_equipment)
+                logger.info("equipment_updated", count=updated_count)
+            except Exception as e:
+                logger.error("equipment_update_failed", error=str(e))
 
+        # Create new equipment if needed
+        created_count = 0
         if equipment_to_create:
             try:
                 created_equipment = await self.skyspark_client.create_equipment(equipment_to_create)
-                logger.info("equipment_created", count=len(created_equipment))
+                created_count = len(created_equipment)
+                logger.info("equipment_created", count=created_count)
 
                 # Add created equipment to the ref map
                 for i, equip in enumerate(created_equipment):
@@ -513,15 +577,16 @@ class PointSyncService:
                     equip_key = equip_keys_to_create[i]
                     equip_ref_map[equip_key] = equip_id
 
-                return (equip_ref_map, len(created_equipment), skipped_count)
-
             except Exception as e:
                 logger.error("equipment_creation_failed", error=str(e))
-                # Return the existing equipment map even if creation failed
-                return (equip_ref_map, 0, skipped_count)
-        else:
+
+        # Calculate skipped count: existing equipment that didn't need updates
+        skipped_count = len(existing_equip_map) - updated_count
+
+        if not equipment_to_create and not equipment_to_update:
             logger.info("all_equipment_already_exists", count=len(equip_ref_map))
-            return (equip_ref_map, 0, skipped_count)
+
+        return (equip_ref_map, created_count, updated_count, skipped_count)
 
     async def _store_site_ref_to_ace(self, ace_site: dict[str, Any], site_id: str) -> None:
         """Store SkySpark site ID back to ACE site as haystackRef.
@@ -640,8 +705,8 @@ class PointSyncService:
         Args:
             ace_point: ACE point dictionary
             sky_point: Existing SkySpark point
-            site_ref: SkySpark site reference ID (unused - preserve existing)
-            equipment_ref_map: Map of equipment key to SkySpark equipment ref (unused - preserve existing)
+            site_ref: SkySpark site reference ID
+            equipment_ref_map: Map of equipment key to SkySpark equipment ref
 
         Returns:
             Updated SkySpark Point model
@@ -654,6 +719,32 @@ class PointSyncService:
         existing_site_ref = sky_point.get("siteRef", {}).get("val", "").lstrip("@")
         existing_equip_ref = sky_point.get("equipRef", {}).get("val", "").lstrip("@")
         existing_kind = sky_point.get("kind", "Number")
+
+        # Determine correct equipment ref from bacnet_data
+        equip_ref = existing_equip_ref  # Default to existing
+        bacnet_data = ace_point.get("bacnet_data")
+        if bacnet_data:
+            device_addr = bacnet_data.get("device_address")
+            device_id = bacnet_data.get("device_id")
+            if device_addr and device_id is not None:
+                equip_key = f"{device_addr}-{device_id}"
+                equip_ref = equipment_ref_map.get(equip_key, existing_equip_ref)
+
+        # Log if refs are being updated
+        if existing_site_ref != site_ref:
+            logger.info(
+                "point_siteref_updating",
+                point=ace_point["name"],
+                old_site=existing_site_ref,
+                new_site=site_ref,
+            )
+        if existing_equip_ref != equip_ref:
+            logger.info(
+                "point_equipref_updating",
+                point=ace_point["name"],
+                old_equip=existing_equip_ref,
+                new_equip=equip_ref,
+            )
 
         # Merge tags from ACE into SkySpark point
         marker_tags = ace_point.get("marker_tags") or []
@@ -670,8 +761,8 @@ class PointSyncService:
             id=point_id,
             dis=point_name,
             refName=existing_ref_name,
-            siteRef=existing_site_ref,
-            equipRef=existing_equip_ref,
+            siteRef=site_ref,  # Use current site ref
+            equipRef=equip_ref,  # Use correct equipment ref
             kind=existing_kind,
             marker_tags=["point"] + marker_tags,
             kv_tags=final_kv_tags,

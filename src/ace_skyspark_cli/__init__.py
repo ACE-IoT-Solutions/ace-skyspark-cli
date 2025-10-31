@@ -15,7 +15,7 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.7.1"
+__version__ = "0.7.2"
 
 logger: Any = None
 
@@ -183,6 +183,7 @@ async def _run_sync(
         click.echo(f"  Sites Created: {result.sites_created}")
         click.echo(f"  Sites Skipped: {result.sites_skipped}")
         click.echo(f"  Equipment Created: {result.equipment_created}")
+        click.echo(f"  Equipment Updated: {result.equipment_updated}")
         click.echo(f"  Equipment Skipped: {result.equipment_skipped}")
         click.echo(f"  Points Created: {result.points_created}")
         click.echo(f"  Points Updated: {result.points_updated}")
