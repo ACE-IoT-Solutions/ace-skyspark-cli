@@ -100,18 +100,19 @@ class PointSyncService:
 
         This method:
         1. Fetches points from ACE FlightDeck for the given site
-        2. Filters to collect_enabled points only (unless sync_all=True)
-        3. Sorts points by name for deterministic ordering
-        4. Applies limit if specified
-        5. Checks for existing SkySpark entities using haystackRef tags
-        6. Creates new entities or updates existing ones
-        7. Maintains idempotency by storing SkySpark IDs back to ACE
+           - Uses /sites/{site}/configured_points by default (collect_enabled=True)
+           - Uses /sites/{site}/points when sync_all=True
+        2. Sorts points by name for deterministic ordering
+        3. Applies limit if specified
+        4. Checks for existing SkySpark entities using haystackRef tags
+        5. Creates new entities or updates existing ones
+        6. Maintains idempotency by storing SkySpark IDs back to ACE
 
         Args:
             site_name: Name of the site to synchronize
             dry_run: If True, don't make any changes
             limit: Maximum number of points to sync (sorted by name for idempotency)
-            sync_all: If True, sync all points including non-collected (default: False)
+            sync_all: If True, sync all points including non-configured (default: False)
 
         Returns:
             SyncResult with statistics
@@ -120,29 +121,14 @@ class PointSyncService:
         logger.info("sync_start", site=site_name, dry_run=dry_run, limit=limit, sync_all=sync_all)
 
         try:
-            # Fetch points from ACE
-            ace_points = await self._fetch_ace_points(site_name)
+            # Fetch points from ACE (configured/collected only unless sync_all=True)
+            ace_points = await self._fetch_ace_points(site_name, configured_only=not sync_all)
 
             if not ace_points:
-                logger.warning("no_points_found", site=site_name)
-                return result
-
-            total_fetched = len(ace_points)
-
-            # Filter to collect_enabled points only (unless sync_all)
-            if not sync_all:
-                ace_points = [p for p in ace_points if p.get("collect_enabled", False)]
-                logger.info(
-                    "filtered_collected_points",
-                    total_fetched=total_fetched,
-                    collected=len(ace_points),
-                    filtered_out=total_fetched - len(ace_points),
-                )
-            else:
-                logger.info("syncing_all_points", total=total_fetched)
-
-            if not ace_points:
-                logger.warning("no_collected_points_found", site=site_name)
+                if sync_all:
+                    logger.warning("no_points_found", site=site_name)
+                else:
+                    logger.warning("no_configured_points_found", site=site_name)
                 return result
 
             # Sort points by name for deterministic ordering
@@ -219,31 +205,40 @@ class PointSyncService:
         logger.info("sync_complete", site=site_name, result=result.to_dict())
         return result
 
-    async def _fetch_ace_points(self, site_name: str) -> list[dict[str, Any]]:
+    async def _fetch_ace_points(
+        self, site_name: str, configured_only: bool = True
+    ) -> list[dict[str, Any]]:
         """Fetch all points from ACE FlightDeck with pagination.
 
         Args:
             site_name: Site name to filter by
+            configured_only: If True, fetch only configured/collected points (default: True)
 
         Returns:
             List of all ACE point dictionaries (paginated)
         """
+        from functools import partial
+
         from aceiot_models.api import get_api_results_paginated
 
-        logger.info("fetching_ace_points", site=site_name)
+        logger.info("fetching_ace_points", site=site_name, configured_only=configured_only)
 
         # ACE API client is synchronous, run in thread pool
         # Use pagination helper to get all points
         loop = asyncio.get_event_loop()
 
-        # Partial function to bind site_name
-        from functools import partial
-        get_points_for_site = partial(self.ace_client.get_site_points, site_name)
+        # Choose API method based on configured_only flag
+        if configured_only:
+            # Use configured_points endpoint (points with collect_enabled=True)
+            get_points_func = partial(self.ace_client.get_site_configured_points, site_name)
+        else:
+            # Use all points endpoint
+            get_points_func = partial(self.ace_client.get_site_points, site_name)
 
         points = await loop.run_in_executor(
             None,
             get_api_results_paginated,
-            get_points_for_site,
+            get_points_func,
             500,  # per_page
         )
 
