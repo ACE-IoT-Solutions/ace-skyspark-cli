@@ -419,32 +419,45 @@ class PointSyncService:
         """
         logger.info("storing_refs_to_ace", count=len(skyspark_points))
 
-        loop = asyncio.get_event_loop()
+        # Build batch of point updates with haystackRef tags
+        points_to_update: list[dict[str, Any]] = []
 
         for ace_point, sky_point in zip(ace_points, skyspark_points, strict=False):
-            try:
-                # Extract SkySpark ID
-                sky_id = sky_point.get("id", {}).get("val", "").lstrip("@")
+            # Extract SkySpark ID
+            sky_id = sky_point.get("id", {}).get("val", "").lstrip("@")
 
-                if not sky_id:
-                    logger.warning("no_id_in_skyspark_point", point=ace_point.get("name", "unknown"))
-                    continue
-
-                # Update ACE point with haystackRef in kv_tags
-                point_name = ace_point["name"]
-                existing_kv_tags = ace_point.get("kv_tags") or {}
-                updated_kv_tags = {**existing_kv_tags, self.HAYSTACK_REF_TAG: sky_id}
-
-                # ACE API client is synchronous, run in thread pool
-                await loop.run_in_executor(
-                    None,
-                    self.ace_client.update_point,
-                    point_name,
-                    {"kv_tags": updated_kv_tags},
-                )
-
-                logger.debug("stored_ref", ace_point=point_name, skyspark_id=sky_id)
-
-            except Exception as e:
-                logger.error("store_ref_failed", point=ace_point.get("name", "unknown"), error=str(e))
+            if not sky_id:
+                logger.warning("no_id_in_skyspark_point", point=ace_point.get("name", "unknown"))
                 continue
+
+            # Prepare point update with haystackRef in kv_tags
+            point_name = ace_point["name"]
+            existing_kv_tags = ace_point.get("kv_tags") or {}
+            updated_kv_tags = {**existing_kv_tags, self.HAYSTACK_REF_TAG: sky_id}
+
+            # Add to batch with only name and kv_tags (merge mode)
+            points_to_update.append({
+                "name": point_name,
+                "kv_tags": updated_kv_tags,
+            })
+
+            logger.debug("prepared_ref_update", ace_point=point_name, skyspark_id=sky_id)
+
+        if not points_to_update:
+            logger.warning("no_refs_to_store")
+            return
+
+        # Batch update using create_points with overwrite_kv_tags=False to merge
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                self.ace_client.create_points,
+                points_to_update,
+                False,  # overwrite_m_tags
+                False,  # overwrite_kv_tags (merge mode)
+            )
+            logger.info("refs_stored_to_ace", count=len(points_to_update))
+        except Exception as e:
+            logger.error("batch_ref_storage_failed", error=str(e), count=len(points_to_update))
+            raise
