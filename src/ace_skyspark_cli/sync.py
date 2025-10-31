@@ -94,27 +94,30 @@ class PointSyncService:
         site_name: str,
         dry_run: bool = False,
         limit: int | None = None,
+        sync_all: bool = False,
     ) -> SyncResult:
         """Synchronize all points for a specific site.
 
         This method:
         1. Fetches points from ACE FlightDeck for the given site
-        2. Sorts points by name for deterministic ordering
-        3. Applies limit if specified
-        4. Checks for existing SkySpark entities using haystackRef tags
-        5. Creates new entities or updates existing ones
-        6. Maintains idempotency by storing SkySpark IDs back to ACE
+        2. Filters to collect_enabled points only (unless sync_all=True)
+        3. Sorts points by name for deterministic ordering
+        4. Applies limit if specified
+        5. Checks for existing SkySpark entities using haystackRef tags
+        6. Creates new entities or updates existing ones
+        7. Maintains idempotency by storing SkySpark IDs back to ACE
 
         Args:
             site_name: Name of the site to synchronize
             dry_run: If True, don't make any changes
             limit: Maximum number of points to sync (sorted by name for idempotency)
+            sync_all: If True, sync all points including non-collected (default: False)
 
         Returns:
             SyncResult with statistics
         """
         result = SyncResult()
-        logger.info("sync_start", site=site_name, dry_run=dry_run, limit=limit)
+        logger.info("sync_start", site=site_name, dry_run=dry_run, limit=limit, sync_all=sync_all)
 
         try:
             # Fetch points from ACE
@@ -122,6 +125,24 @@ class PointSyncService:
 
             if not ace_points:
                 logger.warning("no_points_found", site=site_name)
+                return result
+
+            total_fetched = len(ace_points)
+
+            # Filter to collect_enabled points only (unless sync_all)
+            if not sync_all:
+                ace_points = [p for p in ace_points if p.get("collect_enabled", False)]
+                logger.info(
+                    "filtered_collected_points",
+                    total_fetched=total_fetched,
+                    collected=len(ace_points),
+                    filtered_out=total_fetched - len(ace_points),
+                )
+            else:
+                logger.info("syncing_all_points", total=total_fetched)
+
+            if not ace_points:
+                logger.warning("no_collected_points_found", site=site_name)
                 return result
 
             # Sort points by name for deterministic ordering
@@ -137,7 +158,7 @@ class PointSyncService:
                     limited_to=len(ace_points),
                 )
             else:
-                logger.info("processing_all_points", count=total_points)
+                logger.info("processing_points", count=total_points)
 
             # Fetch existing SkySpark points to check for matches
             skyspark_points = await self._fetch_skyspark_points()

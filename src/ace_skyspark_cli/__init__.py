@@ -15,7 +15,7 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.4.2"
+__version__ = "0.5.0"
 
 logger: Any = None
 
@@ -81,12 +81,17 @@ def cli(ctx: click.Context, env_file: Path, log_level: str, json_logs: bool) -> 
     default=None,
     help="Limit the number of points to sync (sorted by name for idempotency)",
 )
+@click.option(
+    "--sync-all",
+    is_flag=True,
+    help="Sync all points including non-collected (default: only collect_enabled points)",
+)
 @click.pass_obj
-def sync(config: Config, site: str, dry_run: bool, limit: int | None) -> None:
+def sync(config: Config, site: str, dry_run: bool, limit: int | None, sync_all: bool) -> None:
     """Synchronize points from FlightDeck to SkySpark for a specific site.
 
     This command:
-    - Fetches points from ACE FlightDeck for the specified site
+    - Fetches points from ACE FlightDeck for the specified site (collected only by default)
     - Checks for existing SkySpark entities using haystackRef tags
     - Creates new entities or updates existing ones
     - Maintains idempotency by storing SkySpark IDs back to ACE
@@ -95,16 +100,17 @@ def sync(config: Config, site: str, dry_run: bool, limit: int | None) -> None:
         ace-skyspark-cli sync --site "Building A"
         ace-skyspark-cli sync --site "Building A" --dry-run
         ace-skyspark-cli sync --site "Building A" --limit 10
+        ace-skyspark-cli sync --site "Building A" --sync-all
     """
     if not logger:
         click.echo("Logger not initialized", err=True)
         sys.exit(1)
 
-    logger.info("sync_command_start", site=site, dry_run=dry_run, limit=limit)
+    logger.info("sync_command_start", site=site, dry_run=dry_run, limit=limit, sync_all=sync_all)
 
     try:
         # Run async sync operation
-        asyncio.run(_run_sync(config, site, dry_run, limit))
+        asyncio.run(_run_sync(config, site, dry_run, limit, sync_all))
     except KeyboardInterrupt:
         logger.warning("sync_interrupted")
         sys.exit(130)
@@ -113,7 +119,13 @@ def sync(config: Config, site: str, dry_run: bool, limit: int | None) -> None:
         sys.exit(1)
 
 
-async def _run_sync(config: Config, site: str, dry_run: bool, limit: int | None = None) -> None:
+async def _run_sync(
+    config: Config,
+    site: str,
+    dry_run: bool,
+    limit: int | None = None,
+    sync_all: bool = False,
+) -> None:
     """Run the synchronization operation.
 
     Args:
@@ -121,6 +133,7 @@ async def _run_sync(config: Config, site: str, dry_run: bool, limit: int | None 
         site: Site name to synchronize
         dry_run: If True, don't make any changes
         limit: Maximum number of points to sync (sorted by name)
+        sync_all: If True, sync all points including non-collected
     """
     # Import at runtime to avoid circular import issues
     from aceiot_models.api import APIClient
@@ -153,7 +166,9 @@ async def _run_sync(config: Config, site: str, dry_run: bool, limit: int | None 
         )
 
         # Run synchronization
-        result = await sync_service.sync_points_for_site(site, dry_run=dry_run, limit=limit)
+        result = await sync_service.sync_points_for_site(
+            site, dry_run=dry_run, limit=limit, sync_all=sync_all
+        )
 
         # Log results
         logger.info("sync_complete", result=result.to_dict())
