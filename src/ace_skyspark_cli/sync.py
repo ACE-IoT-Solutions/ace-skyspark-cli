@@ -270,6 +270,12 @@ class PointSyncService:
         point_name = ace_point["name"]
         ref_name = f"ace-point-{point_id}" if point_id else f"ace-{point_name.replace(' ', '_')}"
 
+        # Add ace_topic to track original ACE point name
+        final_kv_tags = {
+            "ace_topic": point_name,  # Store original ACE point name
+            **{k: v for k, v in kv_tags.items() if k != self.HAYSTACK_REF_TAG},
+        }
+
         # For now, use placeholder values for required fields
         # In production, these should come from the ACE point or be mapped
         return Point(
@@ -279,7 +285,7 @@ class PointSyncService:
             equipRef="placeholder-equip",  # TODO: Map from ace_point device
             kind="Number",  # TODO: Determine from ace_point data type
             marker_tags=["point", "sensor"] + marker_tags,  # Add sensor as default function marker
-            kv_tags={k: v for k, v in kv_tags.items() if k != self.HAYSTACK_REF_TAG},
+            kv_tags=final_kv_tags,
         )
 
     def _prepare_point_update(
@@ -308,16 +314,23 @@ class PointSyncService:
         # Merge tags from ACE into SkySpark point
         marker_tags = ace_point.get("marker_tags") or []
         kv_tags = ace_point.get("kv_tags") or {}
+        point_name = ace_point["name"]
+
+        # Add ace_topic to track original ACE point name
+        final_kv_tags = {
+            "ace_topic": point_name,  # Store original ACE point name
+            **{k: v for k, v in kv_tags.items() if k != self.HAYSTACK_REF_TAG},
+        }
 
         return Point(
             id=point_id,
-            dis=ace_point["name"],
+            dis=point_name,
             refName=existing_ref_name,
             siteRef=existing_site_ref,
             equipRef=existing_equip_ref,
             kind=existing_kind,
             marker_tags=["point"] + marker_tags,
-            kv_tags={k: v for k, v in kv_tags.items() if k != self.HAYSTACK_REF_TAG},
+            kv_tags=final_kv_tags,
         )
 
     async def _create_points_batch(self, points: list[Point]) -> list[dict[str, Any]]:
