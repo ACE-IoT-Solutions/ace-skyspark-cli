@@ -159,10 +159,11 @@ class PointSyncService:
                 logger.info("processing_points", count=total_points)
 
             # Step 2: Sync equipment entities (extract from points)
-            equipment_ref_map, equip_created_count = await self._sync_equipment(
+            equipment_ref_map, equip_created_count, equip_skipped_count = await self._sync_equipment(
                 site_name, site_ref, ace_points, dry_run
             )
             result.equipment_created += equip_created_count
+            result.equipment_skipped += equip_skipped_count
 
             # Fetch existing SkySpark points to check for matches
             skyspark_points = await self._fetch_skyspark_points()
@@ -338,13 +339,25 @@ class PointSyncService:
             logger.error("fetch_ace_site_failed", site=site_name, error=str(e))
             return (None, False)
 
-        # Check if site already has haystackRef
+        # Check if site already has haystackRef in ACE (if API supports it in future)
         site_kv_tags = ace_site.get("kv_tags") or {}
         existing_ref = site_kv_tags.get(self.HAYSTACK_REF_TAG)
 
         if existing_ref:
-            logger.info("site_already_synced", site=site_name, ref=existing_ref)
+            logger.info("site_already_synced_from_ace", site=site_name, ref=existing_ref)
             return (existing_ref, False)
+
+        # Check if site already exists in SkySpark by refName
+        ref_name = f"ace-site-{site_name}"
+        try:
+            existing_sites = await self.skyspark_client.read_sites()
+            for sky_site in existing_sites:
+                if sky_site.get("refName") == ref_name:
+                    site_id = sky_site.get("id", {}).get("val", "").lstrip("@")
+                    logger.info("site_already_exists_in_skyspark", site=site_name, ref=site_id)
+                    return (site_id, False)
+        except Exception as e:
+            logger.warning("failed_to_check_existing_sites", error=str(e))
 
         if dry_run:
             logger.info("dry_run_would_create_site", site=site_name)
@@ -388,7 +401,7 @@ class PointSyncService:
         site_ref: str,
         ace_points: list[dict[str, Any]],
         dry_run: bool,
-    ) -> tuple[dict[str, str], int]:
+    ) -> tuple[dict[str, str], int, int]:
         """Synchronize equipment entities to SkySpark.
 
         Extracts unique equipment from points' bacnet_data and creates equipment entities.
@@ -400,9 +413,10 @@ class PointSyncService:
             dry_run: If True, don't make any changes
 
         Returns:
-            Tuple of (equipment_ref_map, created_count)
+            Tuple of (equipment_ref_map, created_count, skipped_count)
             - equipment_ref_map: Dictionary mapping equipment identifier to SkySpark equipment ref
             - created_count: Number of equipment entities created
+            - skipped_count: Number of equipment entities that already existed
         """
         logger.info("syncing_equipment", site=site_name)
 
@@ -433,47 +447,81 @@ class PointSyncService:
         logger.info("equipment_extracted", count=len(equipment_map))
 
         if not equipment_map:
-            return ({}, 0)
+            return ({}, 0, 0)
 
         if dry_run:
             logger.info("dry_run_would_create_equipment", count=len(equipment_map))
             dry_run_map = {key: f"dry-run-equip-{key}" for key in equipment_map}
-            return (dry_run_map, len(equipment_map))
+            return (dry_run_map, len(equipment_map), 0)
 
-        # Check for existing equipment with haystackRef
-        # For now, create all equipment - TODO: Add idempotency check
+        # Check for existing equipment in SkySpark by refName
+        try:
+            existing_equipment = await self.skyspark_client.read_equipment()
+            existing_equip_map: dict[str, str] = {}
+            for equip in existing_equipment:
+                ref_name = equip.get("refName", "")
+                # Extract equipment key from refName: "ace-equip-{key}"
+                if ref_name.startswith("ace-equip-"):
+                    equip_key = ref_name[10:]  # Remove "ace-equip-" prefix
+                    equip_id = equip.get("id", {}).get("val", "").lstrip("@")
+                    existing_equip_map[equip_key] = equip_id
+
+            logger.info("existing_equipment_found", count=len(existing_equip_map))
+        except Exception as e:
+            logger.warning("failed_to_check_existing_equipment", error=str(e))
+            existing_equip_map = {}
+
+        # Determine which equipment needs to be created
         equipment_to_create: list[Equipment] = []
+        equip_keys_to_create: list[str] = []
+        equip_ref_map: dict[str, str] = {}
 
         for equip_info in equipment_map.values():
-            equipment_entity = Equipment(
-                dis=equip_info["device_name"],
-                refName=f"ace-equip-{equip_info['key']}",
-                siteRef=site_ref,
-                tags={
-                    "ace_device_key": equip_info["key"],
-                    "bacnet": True,
-                    "device_address": equip_info["device_address"],
-                    "device_id": equip_info["device_id"],
-                },
-            )
-            equipment_to_create.append(equipment_entity)
+            equip_key = equip_info["key"]
 
-        try:
-            created_equipment = await self.skyspark_client.create_equipment(equipment_to_create)
-            logger.info("equipment_created", count=len(created_equipment))
+            # Check if equipment already exists
+            if equip_key in existing_equip_map:
+                equip_ref_map[equip_key] = existing_equip_map[equip_key]
+                logger.debug("equipment_already_exists", key=equip_key, ref=existing_equip_map[equip_key])
+            else:
+                # Need to create this equipment
+                equipment_entity = Equipment(
+                    dis=equip_info["device_name"],
+                    refName=f"ace-equip-{equip_key}",
+                    siteRef=site_ref,
+                    tags={
+                        "ace_device_key": equip_key,
+                        "bacnet": True,
+                        "device_address": equip_info["device_address"],
+                        "device_id": equip_info["device_id"],
+                    },
+                )
+                equipment_to_create.append(equipment_entity)
+                equip_keys_to_create.append(equip_key)
 
-            # Build map of equipment key -> SkySpark ref
-            equip_ref_map: dict[str, str] = {}
-            for i, equip in enumerate(created_equipment):
-                equip_id = equip.get("id", {}).get("val", "").lstrip("@")
-                equip_key = list(equipment_map.keys())[i]
-                equip_ref_map[equip_key] = equip_id
+        # Create new equipment if needed
+        skipped_count = len(existing_equip_map)
 
-            return (equip_ref_map, len(created_equipment))
+        if equipment_to_create:
+            try:
+                created_equipment = await self.skyspark_client.create_equipment(equipment_to_create)
+                logger.info("equipment_created", count=len(created_equipment))
 
-        except Exception as e:
-            logger.error("equipment_creation_failed", error=str(e))
-            return ({}, 0)
+                # Add created equipment to the ref map
+                for i, equip in enumerate(created_equipment):
+                    equip_id = equip.get("id", {}).get("val", "").lstrip("@")
+                    equip_key = equip_keys_to_create[i]
+                    equip_ref_map[equip_key] = equip_id
+
+                return (equip_ref_map, len(created_equipment), skipped_count)
+
+            except Exception as e:
+                logger.error("equipment_creation_failed", error=str(e))
+                # Return the existing equipment map even if creation failed
+                return (equip_ref_map, 0, skipped_count)
+        else:
+            logger.info("all_equipment_already_exists", count=len(equip_ref_map))
+            return (equip_ref_map, 0, skipped_count)
 
     async def _store_site_ref_to_ace(self, ace_site: dict[str, Any], site_id: str) -> None:
         """Store SkySpark site ID back to ACE site as haystackRef.
