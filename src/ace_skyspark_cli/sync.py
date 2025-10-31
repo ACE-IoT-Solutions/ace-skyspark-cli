@@ -220,26 +220,33 @@ class PointSyncService:
         return result
 
     async def _fetch_ace_points(self, site_name: str) -> list[dict[str, Any]]:
-        """Fetch points from ACE FlightDeck.
+        """Fetch all points from ACE FlightDeck with pagination.
 
         Args:
             site_name: Site name to filter by
 
         Returns:
-            List of ACE point dictionaries
+            List of all ACE point dictionaries (paginated)
         """
+        from aceiot_models.api import get_api_results_paginated
+
         logger.info("fetching_ace_points", site=site_name)
 
         # ACE API client is synchronous, run in thread pool
+        # Use pagination helper to get all points
         loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
+
+        # Partial function to bind site_name
+        from functools import partial
+        get_points_for_site = partial(self.ace_client.get_site_points, site_name)
+
+        points = await loop.run_in_executor(
             None,
-            self.ace_client.get_site_points,
-            site_name,
+            get_api_results_paginated,
+            get_points_for_site,
+            500,  # per_page
         )
 
-        # Return points as dictionaries
-        points = response.get("items", [])
         logger.info("ace_points_fetched", site=site_name, count=len(points))
         return points
 
