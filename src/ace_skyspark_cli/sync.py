@@ -4,12 +4,12 @@ This module implements idempotent synchronization of points, equipment, and enti
 from ACE FlightDeck to SkySpark using haystackRef KV tags for tracking.
 """
 
+import asyncio
 from typing import Any
 
 import structlog
 from ace_skyspark_lib import Point, SkysparkClient
 from aceiot_models.api import APIClient
-from aceiot_models.points import Point as ACEPoint
 
 from ace_skyspark_cli.config import Config
 
@@ -115,7 +115,6 @@ class PointSyncService:
         try:
             # Fetch points from ACE
             ace_points = await self._fetch_ace_points(site_name)
-            logger.info("ace_points_fetched", count=len(ace_points), site=site_name)
 
             if not ace_points:
                 logger.warning("no_points_found", site=site_name)
@@ -149,7 +148,7 @@ class PointSyncService:
                         points_to_create.append(new_point)
 
                 except Exception as e:
-                    error_msg = f"Error processing point {ace_point.name}: {e!s}"
+                    error_msg = f"Error processing point {ace_point.get('name', 'unknown')}: {e!s}"
                     result.add_error(error_msg)
                     continue
 
@@ -178,24 +177,29 @@ class PointSyncService:
         logger.info("sync_complete", site=site_name, result=result.to_dict())
         return result
 
-    async def _fetch_ace_points(self, site_name: str) -> list[ACEPoint]:
+    async def _fetch_ace_points(self, site_name: str) -> list[dict[str, Any]]:
         """Fetch points from ACE FlightDeck.
 
         Args:
             site_name: Site name to filter by
 
         Returns:
-            List of ACE points
+            List of ACE point dictionaries
         """
-        # This would use the ACE API client to fetch points
-        # For now, returning empty list as placeholder
         logger.info("fetching_ace_points", site=site_name)
 
-        # Get site ID from name first
-        # Then get points for that site
-        # Example: points = await self.ace_client.get_points_for_site(site_id)
+        # ACE API client is synchronous, run in thread pool
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            self.ace_client.get_site_points,
+            site_name,
+        )
 
-        return []
+        # Return points as dictionaries
+        points = response.get("items", [])
+        logger.info("ace_points_fetched", site=site_name, count=len(points))
+        return points
 
     async def _fetch_skyspark_points(self) -> list[dict[str, Any]]:
         """Fetch all points from SkySpark.
@@ -230,24 +234,25 @@ class PointSyncService:
         logger.debug("ref_map_built", count=len(ref_map))
         return ref_map
 
-    def _get_haystack_ref(self, ace_point: ACEPoint) -> str | None:
+    def _get_haystack_ref(self, ace_point: dict[str, Any]) -> str | None:
         """Get haystackRef from ACE point's KV tags.
 
         Args:
-            ace_point: ACE point
+            ace_point: ACE point dictionary
 
         Returns:
             haystackRef value or None
         """
-        if not ace_point.kv_tags:
+        kv_tags = ace_point.get("kv_tags")
+        if not kv_tags:
             return None
-        return ace_point.kv_tags.get(self.HAYSTACK_REF_TAG)
+        return kv_tags.get(self.HAYSTACK_REF_TAG)
 
-    def _prepare_point_create(self, ace_point: ACEPoint) -> Point:
+    def _prepare_point_create(self, ace_point: dict[str, Any]) -> Point:
         """Prepare a SkySpark Point for creation from ACE point.
 
         Args:
-            ace_point: ACE point data
+            ace_point: ACE point dictionary
 
         Returns:
             SkySpark Point model
@@ -255,33 +260,35 @@ class PointSyncService:
         # Convert ACE point to SkySpark point
         # Apply marker tags and KV tags from FlightDeck
 
-        marker_tags = ace_point.marker_tags or []
-        kv_tags = ace_point.kv_tags or {}
+        marker_tags = ace_point.get("marker_tags") or []
+        kv_tags = ace_point.get("kv_tags") or {}
 
         # Generate a refName from the ACE point ID
-        ref_name = f"ace-point-{ace_point.id}" if hasattr(ace_point, "id") else f"ace-{ace_point.name.replace(' ', '_')}"
+        point_id = ace_point.get("id")
+        point_name = ace_point["name"]
+        ref_name = f"ace-point-{point_id}" if point_id else f"ace-{point_name.replace(' ', '_')}"
 
         # For now, use placeholder values for required fields
         # In production, these should come from the ACE point or be mapped
         return Point(
-            dis=ace_point.name,
+            dis=point_name,
             refName=ref_name,
-            siteRef="placeholder-site",  # TODO: Map from ace_point.site_id
-            equipRef="placeholder-equip",  # TODO: Map from ace_point.device_id
+            siteRef="placeholder-site",  # TODO: Map from ace_point["site"]
+            equipRef="placeholder-equip",  # TODO: Map from ace_point device
             kind="Number",  # TODO: Determine from ace_point data type
-            marker_tags=["point"] + marker_tags,
+            marker_tags=["point", "sensor"] + marker_tags,  # Add sensor as default function marker
             kv_tags={k: v for k, v in kv_tags.items() if k != self.HAYSTACK_REF_TAG},
         )
 
     def _prepare_point_update(
         self,
-        ace_point: ACEPoint,
+        ace_point: dict[str, Any],
         sky_point: dict[str, Any],
     ) -> Point:
         """Prepare a SkySpark Point for update.
 
         Args:
-            ace_point: ACE point data
+            ace_point: ACE point dictionary
             sky_point: Existing SkySpark point
 
         Returns:
@@ -297,12 +304,12 @@ class PointSyncService:
         existing_kind = sky_point.get("kind", "Number")
 
         # Merge tags from ACE into SkySpark point
-        marker_tags = ace_point.marker_tags or []
-        kv_tags = ace_point.kv_tags or {}
+        marker_tags = ace_point.get("marker_tags") or []
+        kv_tags = ace_point.get("kv_tags") or {}
 
         return Point(
             id=point_id,
-            dis=ace_point.name,
+            dis=ace_point["name"],
             refName=existing_ref_name,
             siteRef=existing_site_ref,
             equipRef=existing_equip_ref,
@@ -384,18 +391,18 @@ class PointSyncService:
                 sky_id = sky_point.get("id", {}).get("val", "").lstrip("@")
 
                 if not sky_id:
-                    logger.warning("no_id_in_skyspark_point", point=ace_point.dis)
+                    logger.warning("no_id_in_skyspark_point", point=ace_point.get("name", "unknown"))
                     continue
 
                 # Update ACE point with haystackRef
                 # This would call ACE API to update the point's KV tags
                 # Example: await self.ace_client.update_point_tags(
-                #     point_id=ace_point.id,
+                #     point_id=ace_point["id"],
                 #     kv_tags={self.HAYSTACK_REF_TAG: sky_id}
                 # )
 
-                logger.debug("stored_ref", ace_point=ace_point.dis, skyspark_id=sky_id)
+                logger.debug("stored_ref", ace_point=ace_point.get("name"), skyspark_id=sky_id)
 
             except Exception as e:
-                logger.error("store_ref_failed", point=ace_point.dis, error=str(e))
+                logger.error("store_ref_failed", point=ace_point.get("name", "unknown"), error=str(e))
                 continue
