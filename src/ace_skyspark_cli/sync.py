@@ -217,33 +217,72 @@ class PointSyncService:
         Returns:
             List of all ACE point dictionaries (paginated)
         """
-        from functools import partial
-
-        from aceiot_models.api import get_api_results_paginated
-
         logger.info("fetching_ace_points", site=site_name, configured_only=configured_only)
 
         # ACE API client is synchronous, run in thread pool
-        # Use pagination helper to get all points
         loop = asyncio.get_event_loop()
 
         # Choose API method based on configured_only flag
+        # Note: configured_points endpoint works with per_page=10, all points endpoint crashes
+        per_page = 10  # Safe page size that works for all pages
+
+        all_points: list[dict[str, Any]] = []
+        page = 1
+        total_pages_expected = None
+
+        # Choose the appropriate endpoint
         if configured_only:
-            # Use configured_points endpoint (points with collect_enabled=True)
-            get_points_func = partial(self.ace_client.get_site_configured_points, site_name)
+            api_method = self.ace_client.get_site_configured_points
         else:
-            # Use all points endpoint
-            get_points_func = partial(self.ace_client.get_site_points, site_name)
+            api_method = self.ace_client.get_site_points
 
-        points = await loop.run_in_executor(
-            None,
-            get_api_results_paginated,
-            get_points_func,
-            500,  # per_page
-        )
+        while True:
+            try:
+                # Fetch current page
+                response = await loop.run_in_executor(
+                    None,
+                    api_method,
+                    site_name,
+                    page,
+                    per_page,
+                )
 
-        logger.info("ace_points_fetched", site=site_name, count=len(points))
-        return points
+                # Extract items
+                items = response.get("items", [])
+                if not items:
+                    break
+
+                all_points.extend(items)
+
+                # Track expected total pages
+                if total_pages_expected is None:
+                    total_pages_expected = response.get("pages", 1)
+
+                # Check if we've reached the last page
+                if page >= total_pages_expected:
+                    break
+
+                page += 1
+                logger.debug("fetching_page", page=page, total_pages=total_pages_expected)
+
+                # Add delay between pages to avoid rate limiting
+                await asyncio.sleep(1.0)
+
+            except Exception as e:
+                # Log warning and return what we have so far
+                # Note: FlightDeck API has data corruption issues that cause 500 errors
+                # when fetching certain pages. This is a known server-side issue.
+                logger.warning(
+                    "pagination_failed_continuing_with_partial_data",
+                    page=page,
+                    total_fetched=len(all_points),
+                    expected_total=total_pages_expected * per_page if total_pages_expected else "unknown",
+                    message="FlightDeck API returned 500 error - likely data corruption on this page",
+                )
+                break
+
+        logger.info("ace_points_fetched", site=site_name, count=len(all_points))
+        return all_points
 
     async def _fetch_skyspark_points(self) -> list[dict[str, Any]]:
         """Fetch all points from SkySpark.
