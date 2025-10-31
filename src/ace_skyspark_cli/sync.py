@@ -93,24 +93,28 @@ class PointSyncService:
         self,
         site_name: str,
         dry_run: bool = False,
+        limit: int | None = None,
     ) -> SyncResult:
         """Synchronize all points for a specific site.
 
         This method:
         1. Fetches points from ACE FlightDeck for the given site
-        2. Checks for existing SkySpark entities using haystackRef tags
-        3. Creates new entities or updates existing ones
-        4. Maintains idempotency by storing SkySpark IDs back to ACE
+        2. Sorts points by name for deterministic ordering
+        3. Applies limit if specified
+        4. Checks for existing SkySpark entities using haystackRef tags
+        5. Creates new entities or updates existing ones
+        6. Maintains idempotency by storing SkySpark IDs back to ACE
 
         Args:
             site_name: Name of the site to synchronize
             dry_run: If True, don't make any changes
+            limit: Maximum number of points to sync (sorted by name for idempotency)
 
         Returns:
             SyncResult with statistics
         """
         result = SyncResult()
-        logger.info("sync_start", site=site_name, dry_run=dry_run)
+        logger.info("sync_start", site=site_name, dry_run=dry_run, limit=limit)
 
         try:
             # Fetch points from ACE
@@ -119,6 +123,21 @@ class PointSyncService:
             if not ace_points:
                 logger.warning("no_points_found", site=site_name)
                 return result
+
+            # Sort points by name for deterministic ordering
+            ace_points = sorted(ace_points, key=lambda p: p["name"])
+            total_points = len(ace_points)
+
+            # Apply limit if specified
+            if limit is not None and limit > 0:
+                ace_points = ace_points[:limit]
+                logger.info(
+                    "points_limited",
+                    total=total_points,
+                    limited_to=len(ace_points),
+                )
+            else:
+                logger.info("processing_all_points", count=total_points)
 
             # Fetch existing SkySpark points to check for matches
             skyspark_points = await self._fetch_skyspark_points()

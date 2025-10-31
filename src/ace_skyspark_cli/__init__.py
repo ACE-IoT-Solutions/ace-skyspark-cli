@@ -15,7 +15,7 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 logger: Any = None
 
@@ -75,8 +75,14 @@ def cli(ctx: click.Context, env_file: Path, log_level: str, json_logs: bool) -> 
     is_flag=True,
     help="Perform a dry run without making changes",
 )
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Limit the number of points to sync (sorted by name for idempotency)",
+)
 @click.pass_obj
-def sync(config: Config, site: str, dry_run: bool) -> None:
+def sync(config: Config, site: str, dry_run: bool, limit: int | None) -> None:
     """Synchronize points from FlightDeck to SkySpark for a specific site.
 
     This command:
@@ -88,16 +94,17 @@ def sync(config: Config, site: str, dry_run: bool) -> None:
     Examples:
         ace-skyspark-cli sync --site "Building A"
         ace-skyspark-cli sync --site "Building A" --dry-run
+        ace-skyspark-cli sync --site "Building A" --limit 10
     """
     if not logger:
         click.echo("Logger not initialized", err=True)
         sys.exit(1)
 
-    logger.info("sync_command_start", site=site, dry_run=dry_run)
+    logger.info("sync_command_start", site=site, dry_run=dry_run, limit=limit)
 
     try:
         # Run async sync operation
-        asyncio.run(_run_sync(config, site, dry_run))
+        asyncio.run(_run_sync(config, site, dry_run, limit))
     except KeyboardInterrupt:
         logger.warning("sync_interrupted")
         sys.exit(130)
@@ -106,13 +113,14 @@ def sync(config: Config, site: str, dry_run: bool) -> None:
         sys.exit(1)
 
 
-async def _run_sync(config: Config, site: str, dry_run: bool) -> None:
+async def _run_sync(config: Config, site: str, dry_run: bool, limit: int | None = None) -> None:
     """Run the synchronization operation.
 
     Args:
         config: Application configuration
         site: Site name to synchronize
         dry_run: If True, don't make any changes
+        limit: Maximum number of points to sync (sorted by name)
     """
     # Import at runtime to avoid circular import issues
     from aceiot_models.api import APIClient
@@ -145,13 +153,15 @@ async def _run_sync(config: Config, site: str, dry_run: bool) -> None:
         )
 
         # Run synchronization
-        result = await sync_service.sync_points_for_site(site, dry_run=dry_run)
+        result = await sync_service.sync_points_for_site(site, dry_run=dry_run, limit=limit)
 
         # Log results
         logger.info("sync_complete", result=result.to_dict())
 
         # Display summary
         click.echo("\nSynchronization Results:")
+        if limit is not None:
+            click.echo(f"  Limit Applied: Processing {limit} of available points (sorted by name)")
         click.echo(f"  Points Created: {result.points_created}")
         click.echo(f"  Points Updated: {result.points_updated}")
         click.echo(f"  Points Skipped: {result.points_skipped}")
