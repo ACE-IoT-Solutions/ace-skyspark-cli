@@ -430,18 +430,18 @@ class PointSyncService:
                 logger.warning("no_id_in_skyspark_point", point=ace_point.get("name", "unknown"))
                 continue
 
-            # Prepare point update with haystackRef in kv_tags
-            point_name = ace_point["name"]
+            # Merge haystackRef into existing kv_tags
             existing_kv_tags = ace_point.get("kv_tags") or {}
             updated_kv_tags = {**existing_kv_tags, self.HAYSTACK_REF_TAG: sky_id}
 
-            # Add to batch with only name and kv_tags (merge mode)
-            points_to_update.append({
-                "name": point_name,
-                "kv_tags": updated_kv_tags,
-            })
+            # Create updated point dict with all original data plus haystackRef
+            updated_point = {
+                **ace_point,  # Include all original point data
+                "kv_tags": updated_kv_tags,  # Override with updated kv_tags
+            }
 
-            logger.debug("prepared_ref_update", ace_point=point_name, skyspark_id=sky_id)
+            points_to_update.append(updated_point)
+            logger.debug("prepared_ref_update", ace_point=ace_point["name"], skyspark_id=sky_id)
 
         if not points_to_update:
             logger.warning("no_refs_to_store")
