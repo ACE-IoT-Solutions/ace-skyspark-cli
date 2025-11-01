@@ -121,8 +121,12 @@ class PointSyncService:
         logger.info("sync_start", site=site_name, dry_run=dry_run, limit=limit, sync_all=sync_all)
 
         try:
+            # Get SkySpark project timezone for legacy compatibility
+            skyspark_tz = await self.skyspark_client.get_project_timezone()
+            logger.info("project_timezone_retrieved", tz=skyspark_tz)
+
             # Step 1: Sync site entity first
-            site_ref, site_created = await self._sync_site(site_name, dry_run)
+            site_ref, site_created = await self._sync_site(site_name, dry_run, skyspark_tz)
             if not site_ref:
                 logger.error("site_sync_failed", site=site_name)
                 result.add_error(f"Failed to sync site: {site_name}")
@@ -164,7 +168,7 @@ class PointSyncService:
                 equip_created_count,
                 equip_updated_count,
                 equip_skipped_count,
-            ) = await self._sync_equipment(site_name, site_ref, ace_points, dry_run)
+            ) = await self._sync_equipment(site_name, site_ref, ace_points, dry_run, skyspark_tz)
             result.equipment_created += equip_created_count
             result.equipment_updated += equip_updated_count
             result.equipment_skipped += equip_skipped_count
@@ -198,14 +202,14 @@ class PointSyncService:
                         sky_point = skyspark_ref_map[haystack_ref]
                         logger.debug("point_exists_updating", point=ace_point.get("name"))
                         updated_point = self._prepare_point_update(
-                            ace_point, sky_point, site_ref, equipment_ref_map
+                            ace_point, sky_point, site_ref, equipment_ref_map, skyspark_tz
                         )
                         points_to_update.append(updated_point)
                         ace_points_to_update.append(ace_point)  # Keep original ACE dict
                     else:
                         # Point doesn't exist - prepare create
                         logger.debug("point_new_creating", point=ace_point.get("name"))
-                        new_point = self._prepare_point_create(ace_point, site_ref, equipment_ref_map)
+                        new_point = self._prepare_point_create(ace_point, site_ref, equipment_ref_map, skyspark_tz)
                         points_to_create.append(new_point)
                         ace_points_to_create.append(ace_point)  # Keep original ACE dict
 
@@ -339,12 +343,13 @@ class PointSyncService:
             logger.error("skyspark_fetch_failed", error=str(e))
             return []
 
-    async def _sync_site(self, site_name: str, dry_run: bool) -> tuple[str | None, bool]:
+    async def _sync_site(self, site_name: str, dry_run: bool, skyspark_tz: str) -> tuple[str | None, bool]:
         """Synchronize site entity to SkySpark.
 
         Args:
             site_name: ACE site name
             dry_run: If True, don't make any changes
+            skyspark_tz: SkySpark project timezone
 
         Returns:
             Tuple of (SkySpark site reference ID, was_created)
@@ -388,10 +393,11 @@ class PointSyncService:
         site_entity = Site(
             dis=ace_site.get("nice_name") or site_name,
             refName=f"ace-site-{site_name}",
-            tz="America/Chicago",  # TODO: Determine from location or config
+            tz=skyspark_tz,  # Use SkySpark project timezone
             geoAddr=ace_site.get("address"),
             tags={
                 "ace_site": site_name,
+                "skysparkTz": skyspark_tz,  # Store for legacy compatibility
                 "geoCoord": f"C({ace_site['latitude']},{ace_site['longitude']})"
                 if ace_site.get("latitude") and ace_site.get("longitude")
                 else None,
@@ -422,6 +428,7 @@ class PointSyncService:
         site_ref: str,
         ace_points: list[dict[str, Any]],
         dry_run: bool,
+        skyspark_tz: str,
     ) -> tuple[dict[str, str], int, int, int]:
         """Synchronize equipment entities to SkySpark.
 
@@ -432,6 +439,7 @@ class PointSyncService:
             site_ref: SkySpark site reference ID
             ace_points: List of ACE points
             dry_run: If True, don't make any changes
+            skyspark_tz: SkySpark project timezone
 
         Returns:
             Tuple of (equipment_ref_map, created_count, updated_count, skipped_count)
@@ -549,7 +557,11 @@ class PointSyncService:
                         dis=equip_info["device_name"],
                         refName=ref_name,
                         siteRef=site_ref,
-                        tags=updated_tags,
+                        tz=skyspark_tz,
+                        tags={
+                            **updated_tags,
+                            "skysparkTz": skyspark_tz,  # Store for legacy compatibility
+                        },
                     )
                     equipment_to_update.append(equipment_entity)
                     equip_keys_to_update.append(equip_key)
@@ -561,11 +573,13 @@ class PointSyncService:
                     dis=equip_info["device_name"],
                     refName=ref_name,
                     siteRef=site_ref,
+                    tz=skyspark_tz,
                     tags={
                         "ace_device_key": equip_key,
                         "bacnet": True,
                         "device_address": equip_info["device_address"],
                         "device_id": equip_info["device_id"],
+                        "skysparkTz": skyspark_tz,  # Store for legacy compatibility
                     },
                 )
                 equipment_to_create.append(equipment_entity)
@@ -671,6 +685,7 @@ class PointSyncService:
         ace_point: dict[str, Any],
         site_ref: str,
         equipment_ref_map: dict[str, str],
+        skyspark_tz: str,
     ) -> Point:
         """Prepare a SkySpark Point for creation from ACE point.
 
@@ -678,6 +693,7 @@ class PointSyncService:
             ace_point: ACE point dictionary
             site_ref: SkySpark site reference ID
             equipment_ref_map: Map of equipment key to SkySpark equipment ref
+            skyspark_tz: SkySpark project timezone
 
         Returns:
             SkySpark Point model
@@ -695,9 +711,16 @@ class PointSyncService:
 
         # Add ace_topic to track original ACE point name
         # Filter out haystack_* refs from kv_tags as siteRef/equipRef are top-level Point fields
+        # Filter out skysparkTz as it's top-level field
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            **{k: v for k, v in kv_tags.items() if k not in {self.HAYSTACK_REF_TAG, "haystack_siteRef", "haystack_equipRef"}},
+            "skysparkTz": skyspark_tz,  # Store for legacy compatibility
+            **{k: v for k, v in kv_tags.items() if k not in {
+                self.HAYSTACK_REF_TAG,
+                "haystack_siteRef",
+                "haystack_equipRef",
+                "skysparkTz",  # Don't duplicate
+            }},
         }
 
         # Get equipment ref and display name from bacnet_data
@@ -734,6 +757,7 @@ class PointSyncService:
             siteRef=site_ref,
             equipRef=equip_ref,
             kind="Number",  # TODO: Determine from ace_point data type
+            tz=skyspark_tz,  # Use SkySpark project timezone
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
         )
@@ -744,6 +768,7 @@ class PointSyncService:
         sky_point: dict[str, Any],
         site_ref: str,
         equipment_ref_map: dict[str, str],
+        skyspark_tz: str,
     ) -> Point:
         """Prepare a SkySpark Point for update.
 
@@ -752,6 +777,7 @@ class PointSyncService:
             sky_point: Existing SkySpark point
             site_ref: SkySpark site reference ID
             equipment_ref_map: Map of equipment key to SkySpark equipment ref
+            skyspark_tz: SkySpark project timezone
 
         Returns:
             Updated SkySpark Point model
@@ -865,9 +891,16 @@ class PointSyncService:
 
         # Build kv_tags including mod field for optimistic locking
         # Filter out haystack_* refs from kv_tags as siteRef/equipRef are top-level Point fields
+        # Filter out skysparkTz as it's top-level field
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            **{k: v for k, v in kv_tags.items() if k not in {self.HAYSTACK_REF_TAG, "haystack_siteRef", "haystack_equipRef"}},
+            "skysparkTz": skyspark_tz,  # Store for legacy compatibility
+            **{k: v for k, v in kv_tags.items() if k not in {
+                self.HAYSTACK_REF_TAG,
+                "haystack_siteRef",
+                "haystack_equipRef",
+                "skysparkTz",  # Don't duplicate
+            }},
         }
 
         # Add mod field from existing point for optimistic locking (required for updates)
@@ -882,6 +915,7 @@ class PointSyncService:
             siteRef=site_ref,
             equipRef=equip_ref,
             kind=existing_kind,
+            tz=skyspark_tz,  # Use SkySpark project timezone
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
         )
