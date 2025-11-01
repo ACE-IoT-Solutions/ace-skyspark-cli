@@ -15,7 +15,7 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.7.9"
+__version__ = "0.7.10"
 
 logger: Any = None
 
@@ -195,6 +195,111 @@ async def _run_sync(
                 click.echo(f"  - {error}")
             if len(result.errors) > 10:
                 click.echo(f"  ... and {len(result.errors) - 10} more errors")
+
+
+@cli.command()
+@click.option(
+    "--site",
+    required=False,
+    help="Optional site filter (only sync refs for points from this site)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Perform a dry run without making changes",
+)
+@click.pass_obj
+def sync_refs_from_skyspark(config: Config, site: str | None, dry_run: bool) -> None:
+    """Sync refs from SkySpark back to ACE FlightDeck.
+
+    This command:
+    - Reads points from SkySpark that have ace_topic tags
+    - Extracts the SkySpark refs (id, siteRef, equipRef)
+    - Writes them back to ACE FlightDeck as KV tags
+    - Useful for initial setup or re-syncing lost refs
+
+    Examples:
+        ace-skyspark-cli sync-refs-from-skyspark
+        ace-skyspark-cli sync-refs-from-skyspark --site "Building A"
+        ace-skyspark-cli sync-refs-from-skyspark --dry-run
+    """
+    if not logger:
+        click.echo("Logger not initialized", err=True)
+        sys.exit(1)
+
+    logger.info("sync_refs_from_skyspark_start", site=site, dry_run=dry_run)
+
+    try:
+        # Run async sync operation
+        asyncio.run(_run_sync_refs_from_skyspark(config, site, dry_run))
+    except KeyboardInterrupt:
+        logger.warning("sync_refs_interrupted")
+        sys.exit(130)
+    except Exception as e:
+        logger.error("sync_refs_failed", error=str(e), exc_info=True)
+        sys.exit(1)
+
+
+async def _run_sync_refs_from_skyspark(
+    config: Config,
+    site: str | None = None,
+    dry_run: bool = False,
+) -> None:
+    """Run the sync refs from SkySpark operation.
+
+    Args:
+        config: Application configuration
+        site: Optional site filter
+        dry_run: If True, don't make any changes
+    """
+    # Import at runtime to avoid circular import issues
+    from aceiot_models.api import APIClient
+    from ace_skyspark_cli.sync import PointSyncService
+
+    if not logger:
+        raise RuntimeError("Logger not initialized")
+
+    # Create API clients
+    ace_client = APIClient(
+        base_url=config.flightdeck.api_url,
+        api_key=config.flightdeck.jwt,
+        timeout=config.flightdeck.timeout,
+    )
+
+    async with SkysparkClient(
+        base_url=config.skyspark.url,
+        project=config.skyspark.project,
+        username=config.skyspark.user,
+        password=config.skyspark.password,
+        timeout=config.skyspark.timeout,
+        max_retries=config.skyspark.max_retries,
+        pool_size=config.skyspark.pool_size,
+    ) as skyspark_client:
+        # Create sync service
+        sync_service = PointSyncService(
+            ace_client=ace_client,
+            skyspark_client=skyspark_client,
+            config=config,
+        )
+
+        # Run reverse sync
+        result = await sync_service.sync_refs_from_skyspark(site=site, dry_run=dry_run)
+
+        # Log results
+        logger.info("sync_refs_complete", **result)
+
+        # Display summary
+        click.echo("\nSync Refs from SkySpark Results:")
+        click.echo(f"  Points Found: {result['points_found']}")
+        click.echo(f"  Refs Updated: {result['refs_updated']}")
+        click.echo(f"  Points Skipped: {result['points_skipped']}")
+
+        if result.get("errors"):
+            click.echo(f"\nErrors ({len(result['errors'])}):")
+            for error in result["errors"][:10]:  # Show first 10 errors
+                click.echo(f"  - {error}")
+            if len(result["errors"]) > 10:
+                click.echo(f"  ... and {len(result['errors']) - 10} more errors")
 
 
 @cli.command()

@@ -934,6 +934,185 @@ class PointSyncService:
 
         return updated_points
 
+    async def sync_refs_from_skyspark(
+        self,
+        site: str | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Sync refs from SkySpark back to ACE FlightDeck.
+
+        Reads points from SkySpark that have ace_topic tags and writes
+        the SkySpark refs back to ACE as KV tags.
+
+        Args:
+            site: Optional site name to filter points
+            dry_run: If True, don't make any changes
+
+        Returns:
+            Dictionary with results: points_found, refs_updated, points_skipped, errors
+        """
+        logger.info("sync_refs_from_skyspark_start", site=site, dry_run=dry_run)
+
+        points_found = 0
+        refs_updated = 0
+        points_skipped = 0
+        errors: list[str] = []
+
+        try:
+            # Read all points from SkySpark
+            skyspark_points = await self._fetch_skyspark_points()
+            logger.info("skyspark_points_fetched", count=len(skyspark_points))
+
+            # Filter points that have ace_topic tag
+            points_with_topic = []
+            for sky_point in skyspark_points:
+                ace_topic = sky_point.get("ace_topic")
+                if ace_topic:
+                    # Optionally filter by site
+                    if site:
+                        # ace_topic format: client/site/point_name
+                        topic_parts = ace_topic.split("/")
+                        if len(topic_parts) >= 2:
+                            point_site = topic_parts[1]
+                            if point_site != site:
+                                continue
+
+                    points_with_topic.append(sky_point)
+
+            points_found = len(points_with_topic)
+            logger.info("points_with_ace_topic", count=points_found, site_filter=site)
+
+            if not points_with_topic:
+                logger.warning("no_points_with_ace_topic_found", site=site)
+                return {
+                    "points_found": 0,
+                    "refs_updated": 0,
+                    "points_skipped": 0,
+                    "errors": [],
+                }
+
+            # Build ACE point updates with refs
+            ace_points_to_update: list[dict[str, Any]] = []
+
+            for sky_point in points_with_topic:
+                try:
+                    # Extract ace_topic (this is the ACE point name)
+                    ace_topic = sky_point.get("ace_topic")
+                    if not ace_topic:
+                        points_skipped += 1
+                        continue
+
+                    # Parse ace_topic: client/site/point_name
+                    topic_parts = ace_topic.split("/")
+                    if len(topic_parts) < 3:
+                        logger.warning("invalid_ace_topic_format", topic=ace_topic)
+                        points_skipped += 1
+                        continue
+
+                    client_name = topic_parts[0]
+                    site_name = topic_parts[1]
+                    point_name = "/".join(topic_parts[2:])  # Handle slashes in point name
+
+                    # Extract SkySpark refs
+                    sky_id = sky_point.get("id", {})
+                    if isinstance(sky_id, dict):
+                        sky_id_val = sky_id.get("val", "").lstrip("@")
+                    else:
+                        sky_id_val = str(sky_id).lstrip("@")
+
+                    site_ref = sky_point.get("siteRef", {})
+                    if isinstance(site_ref, dict):
+                        site_ref_val = site_ref.get("val", "").lstrip("@")
+                    else:
+                        site_ref_val = str(site_ref).lstrip("@")
+
+                    equip_ref = sky_point.get("equipRef", {})
+                    if isinstance(equip_ref, dict):
+                        equip_ref_val = equip_ref.get("val", "").lstrip("@")
+                    else:
+                        equip_ref_val = str(equip_ref).lstrip("@")
+
+                    if not sky_id_val:
+                        logger.warning("skyspark_point_missing_id", ace_topic=ace_topic)
+                        points_skipped += 1
+                        continue
+
+                    # Build KV tags update
+                    updated_kv_tags = {
+                        self.HAYSTACK_REF_TAG: sky_id_val,
+                        "haystack_siteRef": site_ref_val,
+                        "haystack_equipRef": equip_ref_val,
+                    }
+
+                    # Create minimal point update
+                    updated_point = {
+                        "name": point_name,
+                        "client": client_name,
+                        "site": site_name,
+                        "kv_tags": updated_kv_tags,
+                    }
+
+                    ace_points_to_update.append(updated_point)
+                    logger.debug(
+                        "prepared_ref_update_from_skyspark",
+                        point_name=point_name,
+                        skyspark_id=sky_id_val,
+                        site_ref=site_ref_val,
+                        equip_ref=equip_ref_val,
+                    )
+
+                except Exception as e:
+                    error_msg = f"Error processing SkySpark point {sky_point.get('dis', 'unknown')}: {e!s}"
+                    logger.error("point_processing_error_skyspark", error=str(e))
+                    errors.append(error_msg)
+                    points_skipped += 1
+                    continue
+
+            if not ace_points_to_update:
+                logger.warning("no_ace_points_to_update")
+                return {
+                    "points_found": points_found,
+                    "refs_updated": 0,
+                    "points_skipped": points_skipped,
+                    "errors": errors,
+                }
+
+            # Update ACE points with refs
+            if not dry_run:
+                loop = asyncio.get_event_loop()
+                try:
+                    await loop.run_in_executor(
+                        None,
+                        self.ace_client.create_points,
+                        ace_points_to_update,
+                        False,  # overwrite_m_tags
+                        False,  # overwrite_kv_tags (merge mode)
+                    )
+                    refs_updated = len(ace_points_to_update)
+                    logger.info("refs_synced_from_skyspark_to_ace", count=refs_updated)
+                except Exception as e:
+                    error_msg = f"Failed to update ACE points: {e!s}"
+                    logger.error("batch_ref_update_failed", error=str(e))
+                    errors.append(error_msg)
+            else:
+                logger.info(
+                    "dry_run_would_update_refs",
+                    count=len(ace_points_to_update),
+                )
+                refs_updated = len(ace_points_to_update)
+
+        except Exception as e:
+            error_msg = f"Sync refs from SkySpark failed: {e!s}"
+            errors.append(error_msg)
+            logger.error("sync_refs_from_skyspark_failed", error=str(e))
+
+        return {
+            "points_found": points_found,
+            "refs_updated": refs_updated,
+            "points_skipped": points_skipped,
+            "errors": errors,
+        }
+
     async def _store_refs_to_ace(
         self,
         ace_points: list[dict[str, Any]],
