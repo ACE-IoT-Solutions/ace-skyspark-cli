@@ -15,7 +15,7 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.7.10"
+__version__ = "0.7.11"
 
 logger: Any = None
 
@@ -96,6 +96,12 @@ def sync(config: Config, site: str, dry_run: bool, limit: int | None, sync_all: 
     - Creates new entities or updates existing ones
     - Maintains idempotency by storing SkySpark IDs back to ACE
 
+    RESILIENT SYNC (v0.7.11+):
+    - Refs are stored after EACH successful batch (not at end)
+    - Continues processing even if a batch fails
+    - Safe to re-run after errors - already-synced points are skipped
+    - Run sync-refs-from-skyspark to recover orphaned points from old failures
+
     By default, only configured points (with collect_enabled=True) are synced.
     Use --sync-all to include all discovered points.
 
@@ -104,6 +110,13 @@ def sync(config: Config, site: str, dry_run: bool, limit: int | None, sync_all: 
         ace-skyspark-cli sync --site "Building A" --dry-run
         ace-skyspark-cli sync --site "Building A" --limit 10
         ace-skyspark-cli sync --site "Building A" --sync-all
+
+    Recovery from failures:
+        # If sync fails mid-run, re-running is safe (already-synced batches are skipped)
+        ace-skyspark-cli sync --site "Building A"
+
+        # To recover orphaned points from old failures (before v0.7.11):
+        ace-skyspark-cli sync-refs-from-skyspark --site "Building A"
     """
     if not logger:
         click.echo("Logger not initialized", err=True)

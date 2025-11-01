@@ -217,19 +217,23 @@ class PointSyncService:
                     result.add_error(error_msg)
                     continue
 
-            # Execute creates and updates
+            # Execute creates and updates with batched ref storage for resilience
             if not dry_run:
                 if points_to_create:
-                    created = await self._create_points_batch(points_to_create)
-                    result.points_created += len(created)
-                    # Store haystackRef, siteRef, equipRef back to ACE
-                    await self._store_refs_to_ace(ace_points_to_create, created)
+                    created, failed = await self._create_points_batch_resilient(
+                        points_to_create, ace_points_to_create
+                    )
+                    result.points_created += created
+                    if failed > 0:
+                        result.add_error(f"Failed to create {failed} points (see logs for details)")
 
                 if points_to_update:
-                    updated = await self._update_points_batch(points_to_update)
-                    result.points_updated += len(updated)
-                    # Store updated refs back to ACE (fixes orphaned refs)
-                    await self._store_refs_to_ace(ace_points_to_update, updated)
+                    updated, failed = await self._update_points_batch_resilient(
+                        points_to_update, ace_points_to_update
+                    )
+                    result.points_updated += updated
+                    if failed > 0:
+                        result.add_error(f"Failed to update {failed} points (see logs for details)")
             else:
                 logger.info(
                     "dry_run_summary",
@@ -882,8 +886,77 @@ class PointSyncService:
             kv_tags=final_kv_tags,
         )
 
+    async def _create_points_batch_resilient(
+        self,
+        points: list[Point],
+        ace_points: list[dict[str, Any]]
+    ) -> tuple[int, int]:
+        """Create points in SkySpark in batches with resilient error handling.
+
+        Stores refs back to ACE after each successful batch to enable recovery.
+        Continues processing even if a batch fails.
+
+        Args:
+            points: List of Point models to create
+            ace_points: Corresponding ACE point dicts for ref storage
+
+        Returns:
+            Tuple of (successful_count, failed_count)
+        """
+        batch_size = self.config.app.batch_size
+        successful_count = 0
+        failed_count = 0
+
+        for i in range(0, len(points), batch_size):
+            batch = points[i : i + batch_size]
+            ace_batch = ace_points[i : i + batch_size]
+            batch_num = i // batch_size + 1
+
+            logger.info("creating_points_batch", batch_num=batch_num, size=len(batch))
+
+            try:
+                # Create batch in SkySpark
+                created = await self.skyspark_client.create_points(batch)
+                logger.info("points_created", count=len(created))
+
+                # CRITICAL: Store refs back to ACE immediately after successful batch
+                # This ensures recovery if next batch fails
+                try:
+                    await self._store_refs_to_ace(ace_batch, created)
+                    successful_count += len(created)
+                    logger.info("refs_stored_for_batch", batch_num=batch_num, count=len(created))
+                except Exception as ref_error:
+                    # Point creation succeeded but ref storage failed
+                    # This is recoverable - refs can be synced later with sync-refs-from-skyspark
+                    logger.error(
+                        "ref_storage_failed_for_batch",
+                        batch_num=batch_num,
+                        error=str(ref_error),
+                        message="Points created but refs not stored - run sync-refs-from-skyspark to fix"
+                    )
+                    successful_count += len(created)
+
+            except Exception as e:
+                logger.error(
+                    "create_batch_failed",
+                    error=str(e),
+                    batch_start=i,
+                    batch_num=batch_num,
+                    message="Continuing with next batch..."
+                )
+                failed_count += len(batch)
+                # Continue to next batch instead of raising
+
+        logger.info(
+            "create_batches_complete",
+            successful=successful_count,
+            failed=failed_count,
+            total=len(points)
+        )
+        return successful_count, failed_count
+
     async def _create_points_batch(self, points: list[Point]) -> list[dict[str, Any]]:
-        """Create points in SkySpark in batches.
+        """Create points in SkySpark in batches (legacy - used internally).
 
         Args:
             points: List of points to create
@@ -908,8 +981,75 @@ class PointSyncService:
 
         return created_points
 
+    async def _update_points_batch_resilient(
+        self,
+        points: list[Point],
+        ace_points: list[dict[str, Any]]
+    ) -> tuple[int, int]:
+        """Update points in SkySpark in batches with resilient error handling.
+
+        Stores refs back to ACE after each successful batch to enable recovery.
+        Continues processing even if a batch fails.
+
+        Args:
+            points: List of Point models to update
+            ace_points: Corresponding ACE point dicts for ref storage
+
+        Returns:
+            Tuple of (successful_count, failed_count)
+        """
+        batch_size = self.config.app.batch_size
+        successful_count = 0
+        failed_count = 0
+
+        for i in range(0, len(points), batch_size):
+            batch = points[i : i + batch_size]
+            ace_batch = ace_points[i : i + batch_size]
+            batch_num = i // batch_size + 1
+
+            logger.info("updating_points_batch", batch_num=batch_num, size=len(batch))
+
+            try:
+                # Update batch in SkySpark
+                updated = await self.skyspark_client.update_points(batch)
+                logger.info("points_updated", count=len(updated))
+
+                # Store updated refs back to ACE (fixes orphaned refs)
+                try:
+                    await self._store_refs_to_ace(ace_batch, updated)
+                    successful_count += len(updated)
+                    logger.info("refs_stored_for_batch", batch_num=batch_num, count=len(updated))
+                except Exception as ref_error:
+                    # Point update succeeded but ref storage failed
+                    logger.error(
+                        "ref_storage_failed_for_batch",
+                        batch_num=batch_num,
+                        error=str(ref_error),
+                        message="Points updated but refs not stored - run sync-refs-from-skyspark to fix"
+                    )
+                    successful_count += len(updated)
+
+            except Exception as e:
+                logger.error(
+                    "update_batch_failed",
+                    error=str(e),
+                    batch_start=i,
+                    batch_num=batch_num,
+                    message="Continuing with next batch..."
+                )
+                failed_count += len(batch)
+                # Continue to next batch instead of raising
+
+        logger.info(
+            "update_batches_complete",
+            successful=successful_count,
+            failed=failed_count,
+            total=len(points)
+        )
+        return successful_count, failed_count
+
     async def _update_points_batch(self, points: list[Point]) -> list[dict[str, Any]]:
-        """Update points in SkySpark in batches.
+        """Update points in SkySpark in batches (legacy - used internally).
 
         Args:
             points: List of points to update
