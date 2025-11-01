@@ -822,11 +822,16 @@ class PointSyncService:
         # Combine existing function markers with ACE marker tags
         final_marker_tags = ["point"] + existing_markers + marker_tags
 
-        # Add ace_topic to track original ACE point name
+        # Build kv_tags including mod field for optimistic locking
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
             **{k: v for k, v in kv_tags.items() if k != self.HAYSTACK_REF_TAG},
         }
+
+        # Add mod field from existing point for optimistic locking (required for updates)
+        mod_val = sky_point.get("mod")
+        if mod_val:
+            final_kv_tags["mod"] = mod_val
 
         return Point(
             id=point_id,
