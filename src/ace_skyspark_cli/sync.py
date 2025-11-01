@@ -758,6 +758,7 @@ class PointSyncService:
             equipRef=equip_ref,
             kind="Number",  # TODO: Determine from ace_point data type
             tz=skyspark_tz,  # Use SkySpark project timezone
+            his=True,  # All ACE points are historized
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
         )
@@ -916,6 +917,7 @@ class PointSyncService:
             equipRef=equip_ref,
             kind=existing_kind,
             tz=skyspark_tz,  # Use SkySpark project timezone
+            his=True,  # All ACE points are historized
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
         )
