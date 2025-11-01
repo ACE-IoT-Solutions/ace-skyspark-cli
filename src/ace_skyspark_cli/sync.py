@@ -186,10 +186,17 @@ class PointSyncService:
                 try:
                     # Check if point already exists in SkySpark
                     haystack_ref = self._get_haystack_ref(ace_point)
+                    logger.debug(
+                        "checking_point",
+                        point=ace_point.get("name"),
+                        haystack_ref=haystack_ref,
+                        ref_type=type(haystack_ref).__name__,
+                    )
 
                     if haystack_ref and haystack_ref in skyspark_ref_map:
                         # Point exists - prepare update (will fix refs if needed)
                         sky_point = skyspark_ref_map[haystack_ref]
+                        logger.debug("point_exists_updating", point=ace_point.get("name"))
                         updated_point = self._prepare_point_update(
                             ace_point, sky_point, site_ref, equipment_ref_map
                         )
@@ -197,12 +204,16 @@ class PointSyncService:
                         ace_points_to_update.append(ace_point)  # Keep original ACE dict
                     else:
                         # Point doesn't exist - prepare create
+                        logger.debug("point_new_creating", point=ace_point.get("name"))
                         new_point = self._prepare_point_create(ace_point, site_ref, equipment_ref_map)
                         points_to_create.append(new_point)
                         ace_points_to_create.append(ace_point)  # Keep original ACE dict
 
                 except Exception as e:
+                    import traceback
+
                     error_msg = f"Error processing point {ace_point.get('name', 'unknown')}: {e!s}"
+                    logger.error("point_processing_error", error=str(e), traceback=traceback.format_exc())
                     result.add_error(error_msg)
                     continue
 
@@ -611,21 +622,29 @@ class PointSyncService:
         )
 
     def _build_ref_map(self, skyspark_points: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        """Build a map of haystackRef -> SkySpark point.
+        """Build a map of SkySpark point ID -> SkySpark point.
+
+        The haystackRef is stored in FlightDeck and contains the SkySpark point ID.
+        This map allows us to look up SkySpark points by their ID.
 
         Args:
             skyspark_points: List of SkySpark points
 
         Returns:
-            Dictionary mapping haystackRef to point data
+            Dictionary mapping SkySpark point ID to point data
         """
         ref_map: dict[str, dict[str, Any]] = {}
 
         for point in skyspark_points:
-            # Look for haystackRef in the point's tags
-            haystack_ref = point.get(self.HAYSTACK_REF_TAG)
-            if haystack_ref:
-                ref_map[str(haystack_ref)] = point
+            # Extract SkySpark point ID
+            point_id = point.get("id", {})
+            if isinstance(point_id, dict):
+                point_id_val = point_id.get("val", "").lstrip("@")
+            else:
+                point_id_val = str(point_id).lstrip("@")
+
+            if point_id_val:
+                ref_map[point_id_val] = point
 
         logger.debug("ref_map_built", count=len(ref_map))
         return ref_map
@@ -716,12 +735,30 @@ class PointSyncService:
             Updated SkySpark Point model
         """
         # Get the SkySpark ID and required fields from existing point
-        point_id = sky_point.get("id", {}).get("val", "").lstrip("@")
+        # Extract point ID (handle both dict and string formats)
+        point_id_val = sky_point.get("id", {})
+        if isinstance(point_id_val, dict):
+            point_id = point_id_val.get("val", "").lstrip("@")
+        else:
+            point_id = str(point_id_val).lstrip("@")
 
         # Get existing values for required fields
         existing_ref_name = sky_point.get("refName", "")
-        existing_site_ref = sky_point.get("siteRef", {}).get("val", "").lstrip("@")
-        existing_equip_ref = sky_point.get("equipRef", {}).get("val", "").lstrip("@")
+
+        # Extract siteRef (handle both dict and string formats)
+        site_ref_val = sky_point.get("siteRef", {})
+        if isinstance(site_ref_val, dict):
+            existing_site_ref = site_ref_val.get("val", "").lstrip("@")
+        else:
+            existing_site_ref = str(site_ref_val).lstrip("@")
+
+        # Extract equipRef (handle both dict and string formats)
+        equip_ref_val = sky_point.get("equipRef", {})
+        if isinstance(equip_ref_val, dict):
+            existing_equip_ref = equip_ref_val.get("val", "").lstrip("@")
+        else:
+            existing_equip_ref = str(equip_ref_val).lstrip("@")
+
         existing_kind = sky_point.get("kind", "Number")
 
         # Determine correct equipment ref from bacnet_data
@@ -750,10 +787,40 @@ class PointSyncService:
                 new_equip=equip_ref,
             )
 
+        # Extract existing marker tags from SkySpark point (especially function markers)
+        existing_markers = []
+        function_markers = {"sensor", "cmd", "sp", "synthetic"}
+
+        # Log relevant fields from sky_point to understand format
+        logger.debug(
+            "sky_point_markers",
+            point=ace_point.get("name"),
+            sensor=sky_point.get("sensor"),
+            cmd=sky_point.get("cmd"),
+            sp=sky_point.get("sp"),
+            synthetic=sky_point.get("synthetic"),
+        )
+
+        for key, val in sky_point.items():
+            # Marker tags in SkySpark are stored as "m:" or True or with _kind: "marker"
+            if key in function_markers:
+                if val == "m:" or val is True or (isinstance(val, dict) and val.get("_kind") == "marker"):
+                    existing_markers.append(key)
+
+        logger.debug(
+            "extracted_markers",
+            point=ace_point.get("name"),
+            existing_markers=existing_markers,
+            has_function_marker=len(existing_markers) > 0,
+        )
+
         # Merge tags from ACE into SkySpark point
         marker_tags = ace_point.get("marker_tags") or []
         kv_tags = ace_point.get("kv_tags") or {}
         point_name = ace_point["name"]
+
+        # Combine existing function markers with ACE marker tags
+        final_marker_tags = ["point"] + existing_markers + marker_tags
 
         # Add ace_topic to track original ACE point name
         final_kv_tags = {
@@ -768,7 +835,7 @@ class PointSyncService:
             siteRef=site_ref,  # Use current site ref
             equipRef=equip_ref,  # Use correct equipment ref
             kind=existing_kind,
-            marker_tags=["point"] + marker_tags,
+            marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
         )
 
