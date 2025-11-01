@@ -712,13 +712,25 @@ class PointSyncService:
             if object_name and object_name.strip():
                 display_name = object_name
 
+        # Build marker tags: ensure exactly one function marker
+        function_markers = {"sensor", "cmd", "sp", "synthetic"}
+        ace_function_markers = [m for m in marker_tags if m in function_markers]
+        ace_other_markers = [m for m in marker_tags if m not in function_markers]
+
+        if ace_function_markers:
+            # ACE has function marker(s), use only the first one
+            final_marker_tags = ["point", ace_function_markers[0]] + ace_other_markers
+        else:
+            # No function marker in ACE tags, add default "sensor"
+            final_marker_tags = ["point", "sensor"] + ace_other_markers
+
         return Point(
             dis=display_name,
             refName=ref_name,
             siteRef=site_ref,
             equipRef=equip_ref,
             kind="Number",  # TODO: Determine from ace_point data type
-            marker_tags=["point", "sensor"] + marker_tags,  # Add sensor as default function marker
+            marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
         )
 
@@ -831,8 +843,21 @@ class PointSyncService:
         marker_tags = ace_point.get("marker_tags") or []
         kv_tags = ace_point.get("kv_tags") or {}
 
-        # Combine existing function markers with ACE marker tags
-        final_marker_tags = ["point"] + existing_markers + marker_tags
+        # Combine markers intelligently: ensure exactly one function marker
+        # ACE marker_tags take precedence over existing SkySpark markers
+        function_markers = {"sensor", "cmd", "sp", "synthetic"}
+        ace_function_markers = [m for m in marker_tags if m in function_markers]
+        ace_other_markers = [m for m in marker_tags if m not in function_markers]
+
+        if ace_function_markers:
+            # ACE has function marker(s), use only the first one
+            final_marker_tags = ["point", ace_function_markers[0]] + ace_other_markers
+        elif existing_markers:
+            # ACE has no function markers, preserve SkySpark's (should be only one)
+            final_marker_tags = ["point", existing_markers[0]] + ace_other_markers
+        else:
+            # No function markers anywhere, add default "sensor"
+            final_marker_tags = ["point", "sensor"] + ace_other_markers
 
         # Build kv_tags including mod field for optimistic locking
         # Filter out haystack_* refs from kv_tags as siteRef/equipRef are top-level Point fields
