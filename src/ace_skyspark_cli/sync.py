@@ -70,7 +70,7 @@ class SyncResult:
 class PointSyncService:
     """Service for synchronizing points from ACE to SkySpark."""
 
-    HAYSTACK_REF_TAG = "haystackRef"
+    HAYSTACK_REF_TAG = "haystack_entityRef"
 
     def __init__(
         self,
@@ -691,14 +691,15 @@ class PointSyncService:
         ref_name = f"ace-point-{point_id}" if point_id else f"ace-{point_name.replace(' ', '_')}"
 
         # Add ace_topic to track original ACE point name
-        # Filter out haystackRef, siteRef, and equipRef from kv_tags as these are top-level Point fields
+        # Filter out haystack_* refs from kv_tags as siteRef/equipRef are top-level Point fields
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            **{k: v for k, v in kv_tags.items() if k not in {self.HAYSTACK_REF_TAG, "siteRef", "equipRef"}},
+            **{k: v for k, v in kv_tags.items() if k not in {self.HAYSTACK_REF_TAG, "haystack_siteRef", "haystack_equipRef"}},
         }
 
-        # Get equipment ref from bacnet_data
+        # Get equipment ref and display name from bacnet_data
         equip_ref = "placeholder-equip"
+        display_name = point_name  # Default to point name
         bacnet_data = ace_point.get("bacnet_data")
         if bacnet_data:
             device_addr = bacnet_data.get("device_address")
@@ -707,8 +708,13 @@ class PointSyncService:
                 equip_key = f"{device_addr}-{device_id}"
                 equip_ref = equipment_ref_map.get(equip_key, "placeholder-equip")
 
+            # Use object_name for display if available and not empty
+            object_name = bacnet_data.get("object_name")
+            if object_name and object_name.strip():
+                display_name = object_name
+
         return Point(
-            dis=point_name,
+            dis=display_name,
             refName=ref_name,
             siteRef=site_ref,
             equipRef=equip_ref,
@@ -762,8 +768,10 @@ class PointSyncService:
 
         existing_kind = sky_point.get("kind", "Number")
 
-        # Determine correct equipment ref from bacnet_data
+        # Determine correct equipment ref and display name from bacnet_data
         equip_ref = existing_equip_ref  # Default to existing
+        point_name = ace_point["name"]
+        display_name = point_name  # Default to point name
         bacnet_data = ace_point.get("bacnet_data")
         if bacnet_data:
             device_addr = bacnet_data.get("device_address")
@@ -771,6 +779,11 @@ class PointSyncService:
             if device_addr and device_id is not None:
                 equip_key = f"{device_addr}-{device_id}"
                 equip_ref = equipment_ref_map.get(equip_key, existing_equip_ref)
+
+            # Use object_name for display if available and not empty
+            object_name = bacnet_data.get("object_name")
+            if object_name and object_name.strip():
+                display_name = object_name
 
         # Log if refs are being updated
         if existing_site_ref != site_ref:
@@ -818,16 +831,15 @@ class PointSyncService:
         # Merge tags from ACE into SkySpark point
         marker_tags = ace_point.get("marker_tags") or []
         kv_tags = ace_point.get("kv_tags") or {}
-        point_name = ace_point["name"]
 
         # Combine existing function markers with ACE marker tags
         final_marker_tags = ["point"] + existing_markers + marker_tags
 
         # Build kv_tags including mod field for optimistic locking
-        # Filter out haystackRef, siteRef, and equipRef from kv_tags as these are top-level Point fields
+        # Filter out haystack_* refs from kv_tags as siteRef/equipRef are top-level Point fields
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            **{k: v for k, v in kv_tags.items() if k not in {self.HAYSTACK_REF_TAG, "siteRef", "equipRef"}},
+            **{k: v for k, v in kv_tags.items() if k not in {self.HAYSTACK_REF_TAG, "haystack_siteRef", "haystack_equipRef"}},
         }
 
         # Add mod field from existing point for optimistic locking (required for updates)
@@ -837,7 +849,7 @@ class PointSyncService:
 
         return Point(
             id=point_id,
-            dis=point_name,
+            dis=display_name,  # Use object_name from bacnet_data if available, else point name
             refName=existing_ref_name,
             siteRef=site_ref,
             equipRef=equip_ref,
@@ -944,8 +956,8 @@ class PointSyncService:
             updated_kv_tags = {
                 **existing_kv_tags,
                 self.HAYSTACK_REF_TAG: sky_id,
-                "siteRef": site_ref_val,
-                "equipRef": equip_ref_val,
+                "haystack_siteRef": site_ref_val,
+                "haystack_equipRef": equip_ref_val,
             }
 
             # Create minimal point update with required fields
