@@ -15,7 +15,7 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.7.7"
+__version__ = "0.7.8"
 
 logger: Any = None
 

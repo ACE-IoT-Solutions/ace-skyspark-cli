@@ -262,8 +262,7 @@ class PointSyncService:
         loop = asyncio.get_event_loop()
 
         # Choose API method based on configured_only flag
-        # Note: configured_points endpoint works with per_page=10, all points endpoint crashes
-        per_page = 10  # Safe page size that works for all pages
+        per_page = 500  # FlightDeck API page size (underlying issues fixed)
 
         all_points: list[dict[str, Any]] = []
         page = 1
