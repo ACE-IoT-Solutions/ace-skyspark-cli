@@ -179,7 +179,8 @@ class PointSyncService:
             # Process each ACE point
             points_to_create: list[Point] = []
             points_to_update: list[Point] = []
-            ace_points_to_create: list[dict[str, Any]] = []  # Track original ACE dicts
+            ace_points_to_create: list[dict[str, Any]] = []  # Track original ACE dicts for creates
+            ace_points_to_update: list[dict[str, Any]] = []  # Track original ACE dicts for updates
 
             for ace_point in ace_points:
                 try:
@@ -193,6 +194,7 @@ class PointSyncService:
                             ace_point, sky_point, site_ref, equipment_ref_map
                         )
                         points_to_update.append(updated_point)
+                        ace_points_to_update.append(ace_point)  # Keep original ACE dict
                     else:
                         # Point doesn't exist - prepare create
                         new_point = self._prepare_point_create(ace_point, site_ref, equipment_ref_map)
@@ -209,12 +211,14 @@ class PointSyncService:
                 if points_to_create:
                     created = await self._create_points_batch(points_to_create)
                     result.points_created += len(created)
-                    # Store haystackRef back to ACE
+                    # Store haystackRef, siteRef, equipRef back to ACE
                     await self._store_refs_to_ace(ace_points_to_create, created)
 
                 if points_to_update:
                     updated = await self._update_points_batch(points_to_update)
                     result.points_updated += len(updated)
+                    # Store updated refs back to ACE (fixes orphaned refs)
+                    await self._store_refs_to_ace(ace_points_to_update, updated)
             else:
                 logger.info(
                     "dry_run_summary",
@@ -825,30 +829,50 @@ class PointSyncService:
         ace_points: list[dict[str, Any]],
         skyspark_points: list[dict[str, Any]],
     ) -> None:
-        """Store SkySpark IDs back to ACE as haystackRef tags.
+        """Store SkySpark references back to ACE as KV tags.
 
-        This ensures idempotency by linking ACE points to SkySpark entities.
+        Stores haystackRef (point ID), siteRef, and equipRef to enable:
+        - Idempotent syncing (haystackRef lookup)
+        - Entity hierarchy tracking (siteRef, equipRef)
 
         Args:
             ace_points: Original ACE point dictionaries
-            skyspark_points: Created SkySpark points with IDs
+            skyspark_points: Created SkySpark points with IDs and references
         """
         logger.info("storing_refs_to_ace", count=len(skyspark_points))
 
-        # Build batch of point updates with haystackRef tags
+        # Build batch of point updates with haystackRef, siteRef, and equipRef tags
         points_to_update: list[dict[str, Any]] = []
 
         for ace_point, sky_point in zip(ace_points, skyspark_points, strict=False):
-            # Extract SkySpark ID
+            # Extract SkySpark references
             sky_id = sky_point.get("id", {}).get("val", "").lstrip("@")
+            site_ref = sky_point.get("siteRef", {})
+            equip_ref = sky_point.get("equipRef", {})
 
             if not sky_id:
                 logger.warning("no_id_in_skyspark_point", point=ace_point.get("name", "unknown"))
                 continue
 
-            # Merge haystackRef into existing kv_tags
+            # Extract ref values from dict format
+            if isinstance(site_ref, dict):
+                site_ref_val = site_ref.get("val", "").lstrip("@")
+            else:
+                site_ref_val = str(site_ref).lstrip("@")
+
+            if isinstance(equip_ref, dict):
+                equip_ref_val = equip_ref.get("val", "").lstrip("@")
+            else:
+                equip_ref_val = str(equip_ref).lstrip("@")
+
+            # Merge all refs into existing kv_tags
             existing_kv_tags = ace_point.get("kv_tags") or {}
-            updated_kv_tags = {**existing_kv_tags, self.HAYSTACK_REF_TAG: sky_id}
+            updated_kv_tags = {
+                **existing_kv_tags,
+                self.HAYSTACK_REF_TAG: sky_id,
+                "siteRef": site_ref_val,
+                "equipRef": equip_ref_val,
+            }
 
             # Create minimal point update with required fields
             # Note: Do NOT include bacnet_data as it may contain empty strings that cause backend errors
@@ -860,7 +884,13 @@ class PointSyncService:
             }
 
             points_to_update.append(updated_point)
-            logger.debug("prepared_ref_update", ace_point=ace_point["name"], skyspark_id=sky_id)
+            logger.debug(
+                "prepared_ref_update",
+                ace_point=ace_point["name"],
+                skyspark_id=sky_id,
+                site_ref=site_ref_val,
+                equip_ref=equip_ref_val,
+            )
 
         if not points_to_update:
             logger.warning("no_refs_to_store")
