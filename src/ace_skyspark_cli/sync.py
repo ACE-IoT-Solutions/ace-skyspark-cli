@@ -691,9 +691,10 @@ class PointSyncService:
         ref_name = f"ace-point-{point_id}" if point_id else f"ace-{point_name.replace(' ', '_')}"
 
         # Add ace_topic to track original ACE point name
+        # Filter out haystackRef, siteRef, and equipRef from kv_tags as these are top-level Point fields
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            **{k: v for k, v in kv_tags.items() if k != self.HAYSTACK_REF_TAG},
+            **{k: v for k, v in kv_tags.items() if k not in {self.HAYSTACK_REF_TAG, "siteRef", "equipRef"}},
         }
 
         # Get equipment ref from bacnet_data
@@ -823,9 +824,10 @@ class PointSyncService:
         final_marker_tags = ["point"] + existing_markers + marker_tags
 
         # Build kv_tags including mod field for optimistic locking
+        # Filter out haystackRef, siteRef, and equipRef from kv_tags as these are top-level Point fields
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            **{k: v for k, v in kv_tags.items() if k != self.HAYSTACK_REF_TAG},
+            **{k: v for k, v in kv_tags.items() if k not in {self.HAYSTACK_REF_TAG, "siteRef", "equipRef"}},
         }
 
         # Add mod field from existing point for optimistic locking (required for updates)
@@ -837,8 +839,8 @@ class PointSyncService:
             id=point_id,
             dis=point_name,
             refName=existing_ref_name,
-            siteRef=site_ref,  # Use current site ref
-            equipRef=equip_ref,  # Use correct equipment ref
+            siteRef=site_ref,
+            equipRef=equip_ref,
             kind=existing_kind,
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
