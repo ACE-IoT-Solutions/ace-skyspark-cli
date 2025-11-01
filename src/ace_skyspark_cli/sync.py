@@ -5,10 +5,12 @@ from ACE FlightDeck to SkySpark using haystackRef KV tags for tracking.
 """
 
 import asyncio
+from datetime import datetime, timezone
 from typing import Any
 
 import structlog
 from ace_skyspark_lib import Equipment, Point, Site, SkysparkClient
+from ace_skyspark_lib.models.history import HistorySample
 from aceiot_models.api import APIClient
 
 from ace_skyspark_cli.config import Config
@@ -121,16 +123,14 @@ class PointSyncService:
         logger.info("sync_start", site=site_name, dry_run=dry_run, limit=limit, sync_all=sync_all)
 
         try:
-            # Get SkySpark project timezone for legacy compatibility
-            skyspark_tz = await self.skyspark_client.get_project_timezone()
-            logger.info("project_timezone_retrieved", tz=skyspark_tz)
-
-            # Step 1: Sync site entity first
-            site_ref, site_created = await self._sync_site(site_name, dry_run, skyspark_tz)
+            # Step 1: Sync site entity first and get site's timezone
+            site_ref, site_created, site_tz = await self._sync_site(site_name, dry_run)
             if not site_ref:
                 logger.error("site_sync_failed", site=site_name)
                 result.add_error(f"Failed to sync site: {site_name}")
                 return result
+
+            logger.info("site_timezone", site=site_name, tz=site_tz)
 
             if site_created:
                 result.sites_created += 1
@@ -168,7 +168,7 @@ class PointSyncService:
                 equip_created_count,
                 equip_updated_count,
                 equip_skipped_count,
-            ) = await self._sync_equipment(site_name, site_ref, ace_points, dry_run, skyspark_tz)
+            ) = await self._sync_equipment(site_name, site_ref, ace_points, dry_run, site_tz)
             result.equipment_created += equip_created_count
             result.equipment_updated += equip_updated_count
             result.equipment_skipped += equip_skipped_count
@@ -202,14 +202,14 @@ class PointSyncService:
                         sky_point = skyspark_ref_map[haystack_ref]
                         logger.debug("point_exists_updating", point=ace_point.get("name"))
                         updated_point = self._prepare_point_update(
-                            ace_point, sky_point, site_ref, equipment_ref_map, skyspark_tz
+                            ace_point, sky_point, site_ref, equipment_ref_map, site_tz
                         )
                         points_to_update.append(updated_point)
                         ace_points_to_update.append(ace_point)  # Keep original ACE dict
                     else:
                         # Point doesn't exist - prepare create
                         logger.debug("point_new_creating", point=ace_point.get("name"))
-                        new_point = self._prepare_point_create(ace_point, site_ref, equipment_ref_map, skyspark_tz)
+                        new_point = self._prepare_point_create(ace_point, site_ref, equipment_ref_map, site_tz)
                         points_to_create.append(new_point)
                         ace_points_to_create.append(ace_point)  # Keep original ACE dict
 
@@ -225,7 +225,7 @@ class PointSyncService:
             if not dry_run:
                 if points_to_create:
                     created, failed = await self._create_points_batch_resilient(
-                        points_to_create, ace_points_to_create
+                        points_to_create, ace_points_to_create, site_tz
                     )
                     result.points_created += created
                     if failed > 0:
@@ -233,7 +233,7 @@ class PointSyncService:
 
                 if points_to_update:
                     updated, failed = await self._update_points_batch_resilient(
-                        points_to_update, ace_points_to_update
+                        points_to_update, ace_points_to_update, site_tz
                     )
                     result.points_updated += updated
                     if failed > 0:
@@ -343,61 +343,75 @@ class PointSyncService:
             logger.error("skyspark_fetch_failed", error=str(e))
             return []
 
-    async def _sync_site(self, site_name: str, dry_run: bool, skyspark_tz: str) -> tuple[str | None, bool]:
+    async def _sync_site(self, site_name: str, dry_run: bool) -> tuple[str | None, bool, str]:
         """Synchronize site entity to SkySpark.
+
+        SkySpark site is the source of truth for timezone.
+        If site exists in SkySpark, we read its timezone.
+        If creating new site, we use ACE's timezone, then read back what SkySpark stored.
 
         Args:
             site_name: ACE site name
             dry_run: If True, don't make any changes
-            skyspark_tz: SkySpark project timezone
 
         Returns:
-            Tuple of (SkySpark site reference ID, was_created)
-            Returns (None, False) if failed
+            Tuple of (SkySpark site reference ID, was_created, site_timezone)
+            Returns (None, False, "UTC") if failed
         """
         logger.info("syncing_site", site=site_name)
 
-        # Fetch site data from ACE
-        loop = asyncio.get_event_loop()
-        try:
-            ace_site = await loop.run_in_executor(None, self.ace_client.get_site, site_name)
-        except Exception as e:
-            logger.error("fetch_ace_site_failed", site=site_name, error=str(e))
-            return (None, False)
-
-        # Check if site already has haystackRef in ACE (if API supports it in future)
-        site_kv_tags = ace_site.get("kv_tags") or {}
-        existing_ref = site_kv_tags.get(self.HAYSTACK_REF_TAG)
-
-        if existing_ref:
-            logger.info("site_already_synced_from_ace", site=site_name, ref=existing_ref)
-            return (existing_ref, False)
-
-        # Check if site already exists in SkySpark by refName
+        # Check if site exists in SkySpark by refName FIRST
+        # SkySpark is source of truth for timezone
         ref_name = f"ace-site-{site_name}"
         try:
             existing_sites = await self.skyspark_client.read_sites()
             for sky_site in existing_sites:
                 if sky_site.get("refName") == ref_name:
                     site_id = sky_site.get("id", {}).get("val", "").lstrip("@")
-                    logger.info("site_already_exists_in_skyspark", site=site_name, ref=site_id)
-                    return (site_id, False)
+                    sky_tz = sky_site.get("tz", "UTC")
+                    logger.info(
+                        "site_already_exists_in_skyspark",
+                        site=site_name,
+                        ref=site_id,
+                        tz=sky_tz,
+                        source="skyspark_site_entity",
+                    )
+                    return (site_id, False, sky_tz)
         except Exception as e:
-            logger.warning("failed_to_check_existing_sites", error=str(e))
+            logger.error("failed_to_check_existing_sites", error=str(e))
+            return (None, False, "UTC")
+
+        # Site doesn't exist in SkySpark - need to create it
+        # Fetch site data from ACE to get attributes for creation
+        loop = asyncio.get_event_loop()
+        try:
+            ace_site = await loop.run_in_executor(None, self.ace_client.get_site, site_name)
+        except Exception as e:
+            logger.error("fetch_ace_site_failed", site=site_name, error=str(e))
+            return (None, False, "UTC")
+
+        # Get timezone from ACE site for initial creation only
+        site_kv_tags = ace_site.get("kv_tags") or {}
+        ace_tz = (
+            site_kv_tags.get("tz")
+            or site_kv_tags.get("timezone")
+            or ace_site.get("timezone")
+            or "UTC"
+        )
+        logger.info("ace_site_timezone_for_creation", site=site_name, tz=ace_tz)
 
         if dry_run:
-            logger.info("dry_run_would_create_site", site=site_name)
-            return ("dry-run-site-ref", True)
+            logger.info("dry_run_would_create_site", site=site_name, tz=ace_tz)
+            return ("dry-run-site-ref", True, ace_tz)
 
-        # Create site in SkySpark
+        # Create site in SkySpark using ACE site's timezone
         site_entity = Site(
             dis=ace_site.get("nice_name") or site_name,
-            refName=f"ace-site-{site_name}",
-            tz=skyspark_tz,  # Use SkySpark project timezone
+            refName=ref_name,
+            tz=ace_tz,  # Use ACE site's timezone for initial creation
             geoAddr=ace_site.get("address"),
             tags={
                 "ace_site": site_name,
-                "skysparkTz": skyspark_tz,  # Store for legacy compatibility
                 "geoCoord": f"C({ace_site['latitude']},{ace_site['longitude']})"
                 if ace_site.get("latitude") and ace_site.get("longitude")
                 else None,
@@ -408,19 +422,27 @@ class PointSyncService:
             created_sites = await self.skyspark_client.create_sites([site_entity])
             if not created_sites:
                 logger.error("site_creation_failed", site=site_name)
-                return (None, False)
+                return (None, False, "UTC")
 
             site_id = created_sites[0].get("id", {}).get("val", "").lstrip("@")
-            logger.info("site_created", site=site_name, skyspark_id=site_id)
+            # Read actual timezone from created site (SkySpark is source of truth)
+            created_site_tz = created_sites[0].get("tz", "UTC")
+            logger.info(
+                "site_created",
+                site=site_name,
+                skyspark_id=site_id,
+                tz=created_site_tz,
+                source="skyspark_site_entity",
+            )
 
-            # Store haystackRef back to ACE
-            await self._store_site_ref_to_ace(ace_site, site_id)
+            # Store haystackRef and timezone back to ACE
+            await self._store_site_ref_to_ace(ace_site, site_id, created_site_tz)
 
-            return (site_id, True)
+            return (site_id, True, created_site_tz)
 
         except Exception as e:
             logger.error("site_creation_failed", site=site_name, error=str(e))
-            return (None, False)
+            return (None, False, "UTC")
 
     async def _sync_equipment(
         self,
@@ -428,7 +450,7 @@ class PointSyncService:
         site_ref: str,
         ace_points: list[dict[str, Any]],
         dry_run: bool,
-        skyspark_tz: str,
+        site_tz: str,
     ) -> tuple[dict[str, str], int, int, int]:
         """Synchronize equipment entities to SkySpark.
 
@@ -439,7 +461,7 @@ class PointSyncService:
             site_ref: SkySpark site reference ID
             ace_points: List of ACE points
             dry_run: If True, don't make any changes
-            skyspark_tz: SkySpark project timezone
+            site_tz: Site's timezone
 
         Returns:
             Tuple of (equipment_ref_map, created_count, updated_count, skipped_count)
@@ -557,11 +579,8 @@ class PointSyncService:
                         dis=equip_info["device_name"],
                         refName=ref_name,
                         siteRef=site_ref,
-                        tz=skyspark_tz,
-                        tags={
-                            **updated_tags,
-                            "skysparkTz": skyspark_tz,  # Store for legacy compatibility
-                        },
+                        tz=site_tz,
+                        tags=updated_tags,
                     )
                     equipment_to_update.append(equipment_entity)
                     equip_keys_to_update.append(equip_key)
@@ -573,13 +592,12 @@ class PointSyncService:
                     dis=equip_info["device_name"],
                     refName=ref_name,
                     siteRef=site_ref,
-                    tz=skyspark_tz,
+                    tz=site_tz,
                     tags={
                         "ace_device_key": equip_key,
                         "bacnet": True,
                         "device_address": equip_info["device_address"],
                         "device_id": equip_info["device_id"],
-                        "skysparkTz": skyspark_tz,  # Store for legacy compatibility
                     },
                 )
                 equipment_to_create.append(equipment_entity)
@@ -620,14 +638,22 @@ class PointSyncService:
 
         return (equip_ref_map, created_count, updated_count, skipped_count)
 
-    async def _store_site_ref_to_ace(self, ace_site: dict[str, Any], site_id: str) -> None:
-        """Store SkySpark site ID back to ACE site as haystackRef.
+    async def _store_site_ref_to_ace(
+        self, ace_site: dict[str, Any], site_id: str, site_tz: str
+    ) -> None:
+        """Store SkySpark site ID and timezone back to ACE site as kv_tags.
 
         Args:
             ace_site: Original ACE site dictionary
             site_id: SkySpark site ID
+            site_tz: SkySpark site's timezone
         """
-        logger.info("storing_site_ref_to_ace", site=ace_site["name"], skyspark_id=site_id)
+        logger.info(
+            "storing_site_ref_to_ace",
+            site=ace_site["name"],
+            skyspark_id=site_id,
+            site_tz=site_tz,
+        )
 
         # Note: ACE API doesn't have a sites update endpoint with kv_tags
         # We would need to add this to aceiot_models or use a custom request
@@ -685,7 +711,7 @@ class PointSyncService:
         ace_point: dict[str, Any],
         site_ref: str,
         equipment_ref_map: dict[str, str],
-        skyspark_tz: str,
+        site_tz: str,
     ) -> Point:
         """Prepare a SkySpark Point for creation from ACE point.
 
@@ -693,7 +719,7 @@ class PointSyncService:
             ace_point: ACE point dictionary
             site_ref: SkySpark site reference ID
             equipment_ref_map: Map of equipment key to SkySpark equipment ref
-            skyspark_tz: SkySpark project timezone
+            site_tz: Site's timezone
 
         Returns:
             SkySpark Point model
@@ -710,16 +736,18 @@ class PointSyncService:
         ref_name = f"ace-point-{point_id}" if point_id else f"ace-{point_name.replace(' ', '_')}"
 
         # Add ace_topic to track original ACE point name
-        # Filter out haystack_* refs from kv_tags as siteRef/equipRef are top-level Point fields
-        # Filter out skysparkTz as it's top-level field
+        # Filter out haystack_* refs and timezone tags from kv_tags
+        # - haystack refs are top-level Point fields (siteRef/equipRef)
+        # - tz is a top-level Point field, not a tag
+        # - skysparkTz is for ACE reference only, not for SkySpark
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            "skysparkTz": skyspark_tz,  # Store for legacy compatibility
             **{k: v for k, v in kv_tags.items() if k not in {
                 self.HAYSTACK_REF_TAG,
                 "haystack_siteRef",
                 "haystack_equipRef",
-                "skysparkTz",  # Don't duplicate
+                "tz",
+                "skysparkTz",
             }},
         }
 
@@ -757,7 +785,7 @@ class PointSyncService:
             siteRef=site_ref,
             equipRef=equip_ref,
             kind="Number",  # TODO: Determine from ace_point data type
-            tz=skyspark_tz,  # Use SkySpark project timezone
+            tz=site_tz,  # Use site's timezone
             his=True,  # All ACE points are historized
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
@@ -769,7 +797,7 @@ class PointSyncService:
         sky_point: dict[str, Any],
         site_ref: str,
         equipment_ref_map: dict[str, str],
-        skyspark_tz: str,
+        site_tz: str,
     ) -> Point:
         """Prepare a SkySpark Point for update.
 
@@ -778,7 +806,7 @@ class PointSyncService:
             sky_point: Existing SkySpark point
             site_ref: SkySpark site reference ID
             equipment_ref_map: Map of equipment key to SkySpark equipment ref
-            skyspark_tz: SkySpark project timezone
+            site_tz: Site's timezone
 
         Returns:
             Updated SkySpark Point model
@@ -891,16 +919,18 @@ class PointSyncService:
             final_marker_tags = ["point", "sensor"] + ace_other_markers
 
         # Build kv_tags including mod field for optimistic locking
-        # Filter out haystack_* refs from kv_tags as siteRef/equipRef are top-level Point fields
-        # Filter out skysparkTz as it's top-level field
+        # Filter out haystack_* refs and timezone tags from kv_tags
+        # - haystack refs are top-level Point fields (siteRef/equipRef)
+        # - tz is a top-level Point field, not a tag
+        # - skysparkTz is for ACE reference only, not for SkySpark
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            "skysparkTz": skyspark_tz,  # Store for legacy compatibility
             **{k: v for k, v in kv_tags.items() if k not in {
                 self.HAYSTACK_REF_TAG,
                 "haystack_siteRef",
                 "haystack_equipRef",
-                "skysparkTz",  # Don't duplicate
+                "tz",
+                "skysparkTz",
             }},
         }
 
@@ -909,6 +939,16 @@ class PointSyncService:
         if mod_val:
             final_kv_tags["mod"] = mod_val
 
+        # Check if timezone needs updating
+        existing_tz = sky_point.get("tz", "")
+        if existing_tz != site_tz:
+            logger.info(
+                "point_tz_updating",
+                point=ace_point["name"],
+                old_tz=existing_tz,
+                new_tz=site_tz,
+            )
+
         return Point(
             id=point_id,
             dis=display_name,  # Use object_name from bacnet_data if available, else point name
@@ -916,7 +956,7 @@ class PointSyncService:
             siteRef=site_ref,
             equipRef=equip_ref,
             kind=existing_kind,
-            tz=skyspark_tz,  # Use SkySpark project timezone
+            tz=site_tz,  # Use site's timezone
             his=True,  # All ACE points are historized
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
@@ -925,7 +965,8 @@ class PointSyncService:
     async def _create_points_batch_resilient(
         self,
         points: list[Point],
-        ace_points: list[dict[str, Any]]
+        ace_points: list[dict[str, Any]],
+        site_tz: str,
     ) -> tuple[int, int]:
         """Create points in SkySpark in batches with resilient error handling.
 
@@ -935,6 +976,7 @@ class PointSyncService:
         Args:
             points: List of Point models to create
             ace_points: Corresponding ACE point dicts for ref storage
+            site_tz: SkySpark site's timezone to store in ACE
 
         Returns:
             Tuple of (successful_count, failed_count)
@@ -958,7 +1000,7 @@ class PointSyncService:
                 # CRITICAL: Store refs back to ACE immediately after successful batch
                 # This ensures recovery if next batch fails
                 try:
-                    await self._store_refs_to_ace(ace_batch, created)
+                    await self._store_refs_to_ace(ace_batch, created, site_tz)
                     successful_count += len(created)
                     logger.info("refs_stored_for_batch", batch_num=batch_num, count=len(created))
                 except Exception as ref_error:
@@ -1020,7 +1062,8 @@ class PointSyncService:
     async def _update_points_batch_resilient(
         self,
         points: list[Point],
-        ace_points: list[dict[str, Any]]
+        ace_points: list[dict[str, Any]],
+        site_tz: str,
     ) -> tuple[int, int]:
         """Update points in SkySpark in batches with resilient error handling.
 
@@ -1030,6 +1073,7 @@ class PointSyncService:
         Args:
             points: List of Point models to update
             ace_points: Corresponding ACE point dicts for ref storage
+            site_tz: SkySpark site's timezone to store in ACE
 
         Returns:
             Tuple of (successful_count, failed_count)
@@ -1052,7 +1096,7 @@ class PointSyncService:
 
                 # Store updated refs back to ACE (fixes orphaned refs)
                 try:
-                    await self._store_refs_to_ace(ace_batch, updated)
+                    await self._store_refs_to_ace(ace_batch, updated, site_tz)
                     successful_count += len(updated)
                     logger.info("refs_stored_for_batch", batch_num=batch_num, count=len(updated))
                 except Exception as ref_error:
@@ -1213,11 +1257,16 @@ class PointSyncService:
                         points_skipped += 1
                         continue
 
+                    # Extract timezone from SkySpark point
+                    sky_tz = sky_point.get("tz", "")
+
                     # Build KV tags update
                     updated_kv_tags = {
                         self.HAYSTACK_REF_TAG: sky_id_val,
                         "haystack_siteRef": site_ref_val,
                         "haystack_equipRef": equip_ref_val,
+                        "tz": sky_tz,  # Store SkySpark tz field
+                        "skysparkTz": sky_tz,  # Store same timezone for legacy compatibility
                     }
 
                     # Create minimal point update
@@ -1235,6 +1284,7 @@ class PointSyncService:
                         skyspark_id=sky_id_val,
                         site_ref=site_ref_val,
                         equip_ref=equip_ref_val,
+                        tz=sky_tz,
                     )
 
                 except Exception as e:
@@ -1293,6 +1343,7 @@ class PointSyncService:
         self,
         ace_points: list[dict[str, Any]],
         skyspark_points: list[dict[str, Any]],
+        site_tz: str = "UTC",
     ) -> None:
         """Store SkySpark references back to ACE as KV tags.
 
@@ -1303,8 +1354,9 @@ class PointSyncService:
         Args:
             ace_points: Original ACE point dictionaries
             skyspark_points: Created SkySpark points with IDs and references
+            site_tz: SkySpark site's timezone to store in ACE
         """
-        logger.info("storing_refs_to_ace", count=len(skyspark_points))
+        logger.info("storing_refs_to_ace", count=len(skyspark_points), site_tz=site_tz)
 
         # Build batch of point updates with haystackRef, siteRef, and equipRef tags
         points_to_update: list[dict[str, Any]] = []
@@ -1330,13 +1382,18 @@ class PointSyncService:
             else:
                 equip_ref_val = str(equip_ref).lstrip("@")
 
-            # Merge all refs into existing kv_tags
+            # Use SkySpark site's timezone (not point's tz field)
+            # SkySpark site is source of truth for timezone
+
+            # Merge all refs and timezone info into existing kv_tags
             existing_kv_tags = ace_point.get("kv_tags") or {}
             updated_kv_tags = {
                 **existing_kv_tags,
                 self.HAYSTACK_REF_TAG: sky_id,
                 "haystack_siteRef": site_ref_val,
                 "haystack_equipRef": equip_ref_val,
+                "tz": site_tz,  # Store SkySpark site's timezone
+                "skysparkTz": site_tz,  # Store same timezone for legacy compatibility
             }
 
             # Create minimal point update with required fields
@@ -1375,3 +1432,213 @@ class PointSyncService:
         except Exception as e:
             logger.error("batch_ref_storage_failed", error=str(e), count=len(points_to_update))
             raise
+
+    async def write_history(
+        self,
+        site: str,
+        start_time: str,
+        end_time: str,
+        limit: int | None = None,
+        chunk_size: int = 1000,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Write historical timeseries data from ACE to SkySpark.
+
+        Args:
+            site: Site name
+            start_time: Start time (ISO format, e.g., "2025-11-01T00:00:00Z" or "2025-11-01")
+            end_time: End time (ISO format, e.g., "2025-11-01T23:59:59Z" or "2025-11-01")
+            limit: Optional limit on number of points to process
+            chunk_size: Number of samples per write chunk
+            dry_run: If True, don't write data
+
+        Returns:
+            Dictionary with results:
+            - points_processed: Number of points processed
+            - samples_read: Total samples read from ACE
+            - samples_written: Total samples written to SkySpark
+            - points_skipped: Points without haystack_entityRef
+            - chunks_written: Number of chunks written
+            - errors: List of error messages
+        """
+        logger.info(
+            "write_history_start",
+            site=site,
+            start_time=start_time,
+            end_time=end_time,
+            limit=limit,
+            chunk_size=chunk_size,
+            dry_run=dry_run,
+        )
+
+        result = {
+            "points_processed": 0,
+            "samples_read": 0,
+            "samples_written": 0,
+            "points_skipped": 0,
+            "chunks_written": 0,
+            "errors": [],
+        }
+
+        try:
+            # Normalize time format - handle both "YYYY-MM-DD" and ISO format
+            if "T" not in start_time:
+                start_time = f"{start_time}T00:00:00Z"
+            if "T" not in end_time:
+                end_time = f"{end_time}T23:59:59Z"
+
+            # Fetch points from ACE for this site
+            logger.info("fetching_ace_points", site=site)
+            loop = asyncio.get_event_loop()
+            ace_points = await loop.run_in_executor(
+                None, self.ace_client.get_site_points, site
+            )
+
+            if not ace_points:
+                logger.warning("no_points_found", site=site)
+                return result
+
+            # Apply limit if specified
+            if limit is not None and limit > 0:
+                ace_points = ace_points[:limit]
+
+            logger.info("points_fetched", count=len(ace_points))
+
+            # Filter points that have haystack_entityRef (are synced to SkySpark)
+            synced_points = []
+            for point in ace_points:
+                kv_tags = point.get("kv_tags") or {}
+                haystack_ref = kv_tags.get(self.HAYSTACK_REF_TAG)
+                if haystack_ref:
+                    synced_points.append({
+                        "name": point["name"],
+                        "skyspark_id": haystack_ref,
+                        "client": point.get("client", ""),
+                        "site": point.get("site", ""),
+                    })
+                else:
+                    result["points_skipped"] += 1
+                    logger.debug("point_not_synced", point=point["name"])
+
+            if not synced_points:
+                logger.warning("no_synced_points_found", site=site)
+                result["errors"].append("No points with haystack_entityRef found. Run sync command first.")
+                return result
+
+            logger.info("synced_points_found", count=len(synced_points))
+            result["points_processed"] = len(synced_points)
+
+            # Read timeseries data from ACE for each point
+            all_samples: list[HistorySample] = []
+
+            for point_info in synced_points:
+                point_name = point_info["name"]
+                skyspark_id = point_info["skyspark_id"]
+
+                try:
+                    logger.debug(
+                        "reading_timeseries",
+                        point=point_name,
+                        start=start_time,
+                        end=end_time,
+                    )
+
+                    # Read timeseries from ACE
+                    ts_data = await loop.run_in_executor(
+                        None,
+                        self.ace_client.get_point_timeseries,
+                        point_name,
+                        start_time,
+                        end_time,
+                    )
+
+                    # Extract samples
+                    point_samples = ts_data.get("point_samples", [])
+
+                    if not point_samples:
+                        logger.debug("no_samples_found", point=point_name)
+                        continue
+
+                    result["samples_read"] += len(point_samples)
+                    logger.debug(
+                        "samples_read",
+                        point=point_name,
+                        count=len(point_samples),
+                    )
+
+                    # Convert ACE format to SkySpark HistorySample format
+                    for sample in point_samples:
+                        try:
+                            # Parse timestamp - handle both Z and +00:00 formats
+                            ts_str = sample["time"]
+                            if ts_str.endswith("Z"):
+                                ts_str = ts_str[:-1] + "+00:00"
+
+                            timestamp = datetime.fromisoformat(ts_str)
+
+                            # Ensure timezone is set
+                            if timestamp.tzinfo is None:
+                                timestamp = timestamp.replace(tzinfo=timezone.utc)
+
+                            history_sample = HistorySample(
+                                point_id=skyspark_id,
+                                timestamp=timestamp,
+                                value=sample["value"],
+                            )
+                            all_samples.append(history_sample)
+
+                        except Exception as sample_error:
+                            error_msg = f"Error converting sample for {point_name}: {sample_error}"
+                            logger.error("sample_conversion_error", error=str(sample_error), point=point_name)
+                            result["errors"].append(error_msg)
+
+                except Exception as point_error:
+                    error_msg = f"Error reading timeseries for {point_name}: {point_error}"
+                    logger.error("point_timeseries_error", error=str(point_error), point=point_name)
+                    result["errors"].append(error_msg)
+
+            if not all_samples:
+                logger.warning("no_samples_to_write")
+                return result
+
+            logger.info("total_samples_to_write", count=len(all_samples))
+
+            # Write to SkySpark using chunked write
+            if not dry_run:
+                try:
+                    write_results = await self.skyspark_client.write_history_chunked(
+                        samples=all_samples,
+                        chunk_size=chunk_size,
+                        max_concurrent=self.config.app.max_concurrent,
+                    )
+
+                    # Aggregate results
+                    for write_result in write_results:
+                        if write_result.success:
+                            result["samples_written"] += write_result.samples_written
+                            result["chunks_written"] += 1
+                        else:
+                            error_msg = f"Chunk write failed: {write_result.error}"
+                            logger.error("chunk_write_failed", error=write_result.error)
+                            result["errors"].append(error_msg)
+
+                    logger.info(
+                        "write_history_complete",
+                        samples_written=result["samples_written"],
+                        chunks_written=result["chunks_written"],
+                    )
+
+                except Exception as write_error:
+                    error_msg = f"Error writing history: {write_error}"
+                    logger.error("write_history_error", error=str(write_error))
+                    result["errors"].append(error_msg)
+            else:
+                logger.info("dry_run_would_write_samples", count=len(all_samples))
+                result["samples_written"] = 0  # Dry run, no actual writes
+
+        except Exception as e:
+            error_msg = f"Write history failed: {e}"
+            logger.error("write_history_failed", error=str(e))
+            result["errors"].append(error_msg)
+
+        return result

@@ -96,7 +96,7 @@ class AppConfig(BaseSettings):
 
     log_level: str = Field(default="INFO", description="Logging level")
     log_json: bool = Field(default=False, description="Use JSON logging format")
-    batch_size: int = Field(default=100, description="Batch size for entity creation")
+    batch_size: int = Field(default=500, description="Batch size for entity creation")
     max_concurrent: int = Field(default=5, description="Maximum concurrent operations")
     dry_run: bool = Field(default=False, description="Dry run mode - no changes made")
 
