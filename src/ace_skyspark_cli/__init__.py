@@ -4,7 +4,7 @@ import asyncio
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import click
 import structlog
@@ -74,9 +74,7 @@ async def create_clients(config: Config):
     logger.info("skyspark_session_closed")
 
 
-def merge_credentials_and_create_config(
-    ctx: click.Context, job_file: str | None = None
-) -> Config:
+def merge_credentials_and_create_config(ctx: click.Context, job_file: str | None = None) -> Config:
     """Merge credentials from CLI args, job file, and env vars, then create Config.
 
     Precedence: CLI args > Job file > Environment variables > Defaults
@@ -473,9 +471,7 @@ def sync_refs_from_skyspark(
         try:
             job_config_obj = JobFile.from_file(job_file)
             if not job_config_obj.sync_refs:
-                click.echo(
-                    "Error: Job file does not contain 'sync_refs' configuration", err=True
-                )
+                click.echo("Error: Job file does not contain 'sync_refs' configuration", err=True)
                 sys.exit(1)
 
             job_sync_refs = job_config_obj.sync_refs
@@ -490,9 +486,7 @@ def sync_refs_from_skyspark(
             click.echo(f"Error loading job file: {e}", err=True)
             sys.exit(1)
 
-    logger.info(
-        "sync_refs_from_skyspark_start", site=site, dry_run=dry_run, job_file=job_file
-    )
+    logger.info("sync_refs_from_skyspark_start", site=site, dry_run=dry_run, job_file=job_file)
 
     try:
         # Run async sync operation
@@ -666,8 +660,8 @@ async def _run_debug_project_tz(config: Config) -> None:
 async def _run_check_timezones(
     config: Config,
     site_filter: str | None = None,
-    fix: bool = False,
-    dry_run: bool = False,
+    _fix: bool = False,  # Not implemented yet
+    _dry_run: bool = False,  # Not implemented yet
 ) -> None:
     """Check timezone consistency between sites and their points.
 
@@ -711,7 +705,10 @@ async def _run_check_timezones(
             # Find site ID by refName or dis
             site_id_filter = None
             for site_id, site_info in site_tz_map.items():
-                if site_info["refName"] == f"ace-site-{site_filter}" or site_info["dis"] == site_filter:
+                if (
+                    site_info["refName"] == f"ace-site-{site_filter}"
+                    or site_info["dis"] == site_filter
+                ):
                     site_id_filter = site_id
                     break
 
@@ -761,16 +758,18 @@ async def _run_check_timezones(
                     mismatches_by_site[point_site_ref] = {
                         "site_dis": site_dis,
                         "site_tz": expected_tz,
-                        "points": []
+                        "points": [],
                     }
 
                 point_id = get_ref_val(point.get("id"))
-                mismatches_by_site[point_site_ref]["points"].append({
-                    "id": point_id,
-                    "dis": point.get("dis", ""),
-                    "refName": point.get("refName", ""),
-                    "current_tz": point_tz,
-                })
+                mismatches_by_site[point_site_ref]["points"].append(
+                    {
+                        "id": point_id,
+                        "dis": point.get("dis", ""),
+                        "refName": point.get("refName", ""),
+                        "current_tz": point_tz,
+                    }
+                )
 
         # Display results
         click.echo(f"\nTotal Sites: {len(all_sites)}")
@@ -781,20 +780,24 @@ async def _run_check_timezones(
 
         if mismatches_by_site:
             total_mismatches = sum(len(info["points"]) for info in mismatches_by_site.values())
-            click.echo(f"\n⚠️  Found {total_mismatches} points with timezone mismatch across {len(mismatches_by_site)} sites")
+            click.echo(
+                f"\n⚠️  Found {total_mismatches} points with timezone mismatch across {len(mismatches_by_site)} sites"
+            )
 
-            for site_ref, info in mismatches_by_site.items():
+            for _site_ref, info in mismatches_by_site.items():
                 click.echo(f"\n  Site: {info['site_dis']} (tz={info['site_tz']})")
                 click.echo(f"  Mismatched points: {len(info['points'])}")
 
                 # Show first 5 points per site
-                for point in info['points'][:5]:
+                for point in info["points"][:5]:
                     click.echo(f"    - {point['dis']} (tz={point['current_tz']})")
 
-                if len(info['points']) > 5:
+                if len(info["points"]) > 5:
                     click.echo(f"    ... and {len(info['points']) - 5} more")
 
-            click.echo(f"\n⚠️  IMPORTANT: SkySpark does NOT allow updating the 'tz' field on existing points.")
+            click.echo(
+                "\n⚠️  IMPORTANT: SkySpark does NOT allow updating the 'tz' field on existing points."
+            )
             click.echo("The 'tz' field is immutable after point creation.")
             click.echo("\nTo fix this, you would need to:")
             click.echo("  1. Delete the points with incorrect timezone (⚠️ LOSES HISTORICAL DATA)")
@@ -823,9 +826,20 @@ async def _run_check_timezones(
     required=False,
     help="End time (ISO format: 2025-11-01T23:59:59Z or 2025-11-01) (overrides job file)",
 )
-@click.option("--limit", type=int, default=None, help="Limit number of points to process (overrides job file)")
-@click.option("--chunk-size", type=int, default=None, help="Number of samples per write chunk (overrides job file)")
-@click.option("--dry-run", is_flag=True, help="Show what would be written without writing (overrides job file)")
+@click.option(
+    "--limit", type=int, default=None, help="Limit number of points to process (overrides job file)"
+)
+@click.option(
+    "--chunk-size",
+    type=int,
+    default=None,
+    help="Number of samples per write chunk (overrides job file)",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    help="Show what would be written without writing (overrides job file)",
+)
 @click.pass_context
 def write_history(
     ctx: click.Context,
@@ -1018,9 +1032,7 @@ def check_timezones(
             click.echo(f"Error loading job file: {e}", err=True)
             sys.exit(1)
 
-    logger.info(
-        "check_timezones_start", site=site, fix=fix, dry_run=dry_run, job_file=job_file
-    )
+    logger.info("check_timezones_start", site=site, fix=fix, dry_run=dry_run, job_file=job_file)
 
     try:
         asyncio.run(_run_check_timezones(config, site, fix, dry_run))
@@ -1185,7 +1197,9 @@ def generate_job_template(command: str, output: str, format: str, force: bool) -
         click.echo(f"✓ Generated {command} job template: {output_path}")
         click.echo("\nNext steps:")
         click.echo(f"  1. Edit {output_path} with your parameters")
-        click.echo(f"  2. Run: ace-skyspark-cli {command.replace('-', '_').replace('_refs', '-refs-from-skyspark')} --job-file {output_path}")
+        click.echo(
+            f"  2. Run: ace-skyspark-cli {command.replace('-', '_').replace('_refs', '-refs-from-skyspark')} --job-file {output_path}"
+        )
 
     except Exception as e:
         click.echo(f"Error generating template: {e}", err=True)

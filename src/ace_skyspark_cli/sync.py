@@ -5,7 +5,7 @@ from ACE FlightDeck to SkySpark using haystackRef KV tags for tracking.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import structlog
@@ -209,7 +209,9 @@ class PointSyncService:
                     else:
                         # Point doesn't exist - prepare create
                         logger.debug("point_new_creating", point=ace_point.get("name"))
-                        new_point = self._prepare_point_create(ace_point, site_ref, equipment_ref_map, site_tz)
+                        new_point = self._prepare_point_create(
+                            ace_point, site_ref, equipment_ref_map, site_tz
+                        )
                         points_to_create.append(new_point)
                         ace_points_to_create.append(ace_point)  # Keep original ACE dict
 
@@ -217,7 +219,9 @@ class PointSyncService:
                     import traceback
 
                     error_msg = f"Error processing point {ace_point.get('name', 'unknown')}: {e!s}"
-                    logger.error("point_processing_error", error=str(e), traceback=traceback.format_exc())
+                    logger.error(
+                        "point_processing_error", error=str(e), traceback=traceback.format_exc()
+                    )
                     result.add_error(error_msg)
                     continue
 
@@ -314,7 +318,7 @@ class PointSyncService:
                 # Add delay between pages to avoid rate limiting
                 await asyncio.sleep(1.0)
 
-            except Exception as e:
+            except Exception:
                 # Log warning and return what we have so far
                 # Note: FlightDeck API has data corruption issues that cause 500 errors
                 # when fetching certain pages. This is a known server-side issue.
@@ -322,7 +326,9 @@ class PointSyncService:
                     "pagination_failed_continuing_with_partial_data",
                     page=page,
                     total_fetched=len(all_points),
-                    expected_total=total_pages_expected * per_page if total_pages_expected else "unknown",
+                    expected_total=total_pages_expected * per_page
+                    if total_pages_expected
+                    else "unknown",
                     message="FlightDeck API returned 500 error - likely data corruption on this page",
                 )
                 break
@@ -562,7 +568,15 @@ class PointSyncService:
                     existing_tags = {}
                     for key, val in existing_equip.items():
                         # Skip system fields that shouldn't be in updates (keep mod for optimistic locking)
-                        if key not in {"id", "dis", "refName", "siteRef", "equipRef", "equip", "tz"}:
+                        if key not in {
+                            "id",
+                            "dis",
+                            "refName",
+                            "siteRef",
+                            "equipRef",
+                            "equip",
+                            "tz",
+                        }:
                             existing_tags[key] = val
 
                     # Merge with our required tags
@@ -742,13 +756,18 @@ class PointSyncService:
         # - skysparkTz is for ACE reference only, not for SkySpark
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            **{k: v for k, v in kv_tags.items() if k not in {
-                self.HAYSTACK_REF_TAG,
-                "haystack_siteRef",
-                "haystack_equipRef",
-                "tz",
-                "skysparkTz",
-            }},
+            **{
+                k: v
+                for k, v in kv_tags.items()
+                if k
+                not in {
+                    self.HAYSTACK_REF_TAG,
+                    "haystack_siteRef",
+                    "haystack_equipRef",
+                    "tz",
+                    "skysparkTz",
+                }
+            },
         }
 
         # Get equipment ref and display name from bacnet_data
@@ -887,9 +906,12 @@ class PointSyncService:
 
         for key, val in sky_point.items():
             # Marker tags in SkySpark are stored as "m:" or True or with _kind: "marker"
-            if key in function_markers:
-                if val == "m:" or val is True or (isinstance(val, dict) and val.get("_kind") == "marker"):
-                    existing_markers.append(key)
+            if key in function_markers and (
+                val == "m:"
+                or val is True
+                or (isinstance(val, dict) and val.get("_kind") == "marker")
+            ):
+                existing_markers.append(key)
 
         logger.debug(
             "extracted_markers",
@@ -925,13 +947,18 @@ class PointSyncService:
         # - skysparkTz is for ACE reference only, not for SkySpark
         final_kv_tags = {
             "ace_topic": point_name,  # Store original ACE point name
-            **{k: v for k, v in kv_tags.items() if k not in {
-                self.HAYSTACK_REF_TAG,
-                "haystack_siteRef",
-                "haystack_equipRef",
-                "tz",
-                "skysparkTz",
-            }},
+            **{
+                k: v
+                for k, v in kv_tags.items()
+                if k
+                not in {
+                    self.HAYSTACK_REF_TAG,
+                    "haystack_siteRef",
+                    "haystack_equipRef",
+                    "tz",
+                    "skysparkTz",
+                }
+            },
         }
 
         # Add mod field from existing point for optimistic locking (required for updates)
@@ -1010,7 +1037,7 @@ class PointSyncService:
                         "ref_storage_failed_for_batch",
                         batch_num=batch_num,
                         error=str(ref_error),
-                        message="Points created but refs not stored - run sync-refs-from-skyspark to fix"
+                        message="Points created but refs not stored - run sync-refs-from-skyspark to fix",
                     )
                     successful_count += len(created)
 
@@ -1020,7 +1047,7 @@ class PointSyncService:
                     error=str(e),
                     batch_start=i,
                     batch_num=batch_num,
-                    message="Continuing with next batch..."
+                    message="Continuing with next batch...",
                 )
                 failed_count += len(batch)
                 # Continue to next batch instead of raising
@@ -1029,7 +1056,7 @@ class PointSyncService:
             "create_batches_complete",
             successful=successful_count,
             failed=failed_count,
-            total=len(points)
+            total=len(points),
         )
         return successful_count, failed_count
 
@@ -1105,7 +1132,7 @@ class PointSyncService:
                         "ref_storage_failed_for_batch",
                         batch_num=batch_num,
                         error=str(ref_error),
-                        message="Points updated but refs not stored - run sync-refs-from-skyspark to fix"
+                        message="Points updated but refs not stored - run sync-refs-from-skyspark to fix",
                     )
                     successful_count += len(updated)
 
@@ -1115,7 +1142,7 @@ class PointSyncService:
                     error=str(e),
                     batch_start=i,
                     batch_num=batch_num,
-                    message="Continuing with next batch..."
+                    message="Continuing with next batch...",
                 )
                 failed_count += len(batch)
                 # Continue to next batch instead of raising
@@ -1124,7 +1151,7 @@ class PointSyncService:
             "update_batches_complete",
             successful=successful_count,
             failed=failed_count,
-            total=len(points)
+            total=len(points),
         )
         return successful_count, failed_count
 
@@ -1288,7 +1315,9 @@ class PointSyncService:
                     )
 
                 except Exception as e:
-                    error_msg = f"Error processing SkySpark point {sky_point.get('dis', 'unknown')}: {e!s}"
+                    error_msg = (
+                        f"Error processing SkySpark point {sky_point.get('dis', 'unknown')}: {e!s}"
+                    )
                     logger.error("point_processing_error_skyspark", error=str(e))
                     errors.append(error_msg)
                     points_skipped += 1
@@ -1490,9 +1519,7 @@ class PointSyncService:
             # Fetch points from ACE for this site
             logger.info("fetching_ace_points", site=site)
             loop = asyncio.get_event_loop()
-            ace_points = await loop.run_in_executor(
-                None, self.ace_client.get_site_points, site
-            )
+            ace_points = await loop.run_in_executor(None, self.ace_client.get_site_points, site)
 
             if not ace_points:
                 logger.warning("no_points_found", site=site)
@@ -1510,19 +1537,23 @@ class PointSyncService:
                 kv_tags = point.get("kv_tags") or {}
                 haystack_ref = kv_tags.get(self.HAYSTACK_REF_TAG)
                 if haystack_ref:
-                    synced_points.append({
-                        "name": point["name"],
-                        "skyspark_id": haystack_ref,
-                        "client": point.get("client", ""),
-                        "site": point.get("site", ""),
-                    })
+                    synced_points.append(
+                        {
+                            "name": point["name"],
+                            "skyspark_id": haystack_ref,
+                            "client": point.get("client", ""),
+                            "site": point.get("site", ""),
+                        }
+                    )
                 else:
                     result["points_skipped"] += 1
                     logger.debug("point_not_synced", point=point["name"])
 
             if not synced_points:
                 logger.warning("no_synced_points_found", site=site)
-                result["errors"].append("No points with haystack_entityRef found. Run sync command first.")
+                result["errors"].append(
+                    "No points with haystack_entityRef found. Run sync command first."
+                )
                 return result
 
             logger.info("synced_points_found", count=len(synced_points))
@@ -1578,7 +1609,7 @@ class PointSyncService:
 
                             # Ensure timezone is set
                             if timestamp.tzinfo is None:
-                                timestamp = timestamp.replace(tzinfo=timezone.utc)
+                                timestamp = timestamp.replace(tzinfo=UTC)
 
                             history_sample = HistorySample(
                                 point_id=skyspark_id,
@@ -1589,7 +1620,9 @@ class PointSyncService:
 
                         except Exception as sample_error:
                             error_msg = f"Error converting sample for {point_name}: {sample_error}"
-                            logger.error("sample_conversion_error", error=str(sample_error), point=point_name)
+                            logger.error(
+                                "sample_conversion_error", error=str(sample_error), point=point_name
+                            )
                             result["errors"].append(error_msg)
 
                 except Exception as point_error:

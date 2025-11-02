@@ -4,7 +4,7 @@ requires-python = ">=3.13"
 
 [[package]]
 name = "ace-skyspark-cli"
-version = "0.11.1"
+version = "0.11.3"
 source = { editable = "." }
 dependencies = [
     { name = "ace-skyspark-lib" },
@@ -30,7 +30,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ace-skyspark-lib", directory = "../ace-skyspark-lib" },
+    { name = "ace-skyspark-lib", specifier = ">=0.1.8" },
     { name = "aceiot-models", specifier = ">=0.3.4" },
     { name = "click", specifier = ">=8.3.0" },
     { name = "pydantic", specifier = ">=2.12.3" },
@@ -54,7 +54,7 @@ dev = [
 [[package]]
 name = "ace-skyspark-lib"
 version = "0.1.8"
-source = { directory = "../ace-skyspark-lib" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aceiot-models" },
     { name = "httpx" },
@@ -65,29 +65,9 @@ dependencies = [
     { name = "structlog" },
     { name = "tenacity" },
 ]
-
-[package.metadata]
-requires-dist = [
-    { name = "aceiot-models", specifier = ">=0.3.4" },
-    { name = "httpx", specifier = ">=0.27.0" },
-    { name = "pydantic", specifier = ">=2.12.3" },
-    { name = "python-dateutil", specifier = ">=2.9.0" },
-    { name = "pytz", specifier = ">=2024.1" },
-    { name = "scramp", specifier = ">=1.4.5" },
-    { name = "structlog", specifier = ">=24.1.0" },
-    { name = "tenacity", specifier = ">=8.5.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.13.0" },
-    { name = "pyrefly", specifier = ">=0.39.4" },
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", specifier = ">=0.24.0" },
-    { name = "pytest-cov", specifier = ">=5.0.0" },
-    { name = "pytest-mock", specifier = ">=3.14.0" },
-    { name = "python-dotenv", specifier = ">=1.0.0" },
-    { name = "ruff", specifier = ">=0.14.2" },
+sdist = { url = "https://files.pythonhosted.org/packages/78/96/b7c08c3f01f1910127e72a7e112e4e2513b751686d5c396170a6705a9515/ace_skyspark_lib-0.1.8.tar.gz", hash = "sha256:3e922bc51750ee96aa2128db1631968c96883ac8a3dcb36611b83cc12d399a02", size = 110227, upload-time = "2025-11-02T17:31:51.687Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/70/cc/1f594647d9c29529ce810439f1315b15e3e488eea21ae6881b85c32f01e1/ace_skyspark_lib-0.1.8-py3-none-any.whl", hash = "sha256:955de6174ab43c38b10954deef369455b88afde9c6168ec38f3cc61b8d0c7e59", size = 29127, upload-time = "2025-11-02T17:31:50.088Z" },
 ]
 
 [[package]]

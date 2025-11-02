@@ -160,7 +160,9 @@ class Config:
             self.skyspark.pool_size = overrides["skyspark_pool_size"]
 
     @classmethod
-    def from_env(cls, env_file: str | None = None, overrides: dict[str, Any] | None = None) -> "Config":
+    def from_env(
+        cls, env_file: str | None = None, overrides: dict[str, Any] | None = None
+    ) -> "Config":
         """Load configuration from environment.
 
         Args:

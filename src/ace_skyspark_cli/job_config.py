@@ -19,10 +19,10 @@ class CredentialsConfig(BaseModel):
     """Configuration for FlightDeck and SkySpark credentials."""
 
     # FlightDeck credentials
-    flightdeck_api_url: str | None = Field(
-        default=None, description="FlightDeck API base URL"
+    flightdeck_api_url: str | None = Field(default=None, description="FlightDeck API base URL")
+    flightdeck_jwt: str | None = Field(
+        default=None, description="FlightDeck JWT authentication token"
     )
-    flightdeck_jwt: str | None = Field(default=None, description="FlightDeck JWT authentication token")
 
     # SkySpark credentials
     skyspark_url: str | None = Field(default=None, description="SkySpark server URL")
@@ -33,8 +33,12 @@ class CredentialsConfig(BaseModel):
     # Optional overrides for advanced settings
     skyspark_timeout: float | None = Field(default=None, description="SkySpark timeout in seconds")
     skyspark_max_retries: int | None = Field(default=None, description="SkySpark max retries")
-    skyspark_pool_size: int | None = Field(default=None, description="SkySpark connection pool size")
-    flightdeck_timeout: int | None = Field(default=None, description="FlightDeck timeout in seconds")
+    skyspark_pool_size: int | None = Field(
+        default=None, description="SkySpark connection pool size"
+    )
+    flightdeck_timeout: int | None = Field(
+        default=None, description="FlightDeck timeout in seconds"
+    )
 
 
 class SyncJobConfig(BaseModel):
@@ -85,7 +89,9 @@ class WriteHistoryJobConfig(BaseModel):
     """Configuration for write-history command."""
 
     site: str = Field(..., description="Site name to write history for")
-    start: str = Field(..., description="Start time (ISO format: 2025-11-01T00:00:00Z or 2025-11-01)")
+    start: str = Field(
+        ..., description="Start time (ISO format: 2025-11-01T00:00:00Z or 2025-11-01)"
+    )
     end: str = Field(..., description="End time (ISO format: 2025-11-01T23:59:59Z or 2025-11-01)")
     limit: int | None = Field(default=None, description="Limit number of points to process")
     chunk_size: int = Field(default=1000, description="Number of samples per write chunk")
