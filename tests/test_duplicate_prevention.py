@@ -294,7 +294,8 @@ class TestCrossEntityDuplicates:
 
     @pytest.mark.unit
     async def test_allow_same_refname_different_equipment(
-        self, mock_skyspark_client: MagicMock  # noqa: ARG002
+        self,
+        mock_skyspark_client: MagicMock,  # noqa: ARG002
     ) -> None:
         """Test allowing same refName for points on different equipment."""
         refname = "discharge-temp"

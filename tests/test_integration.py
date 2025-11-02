@@ -12,7 +12,8 @@ from aceiot_models.api import APIClient
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_skyspark_connection(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test connection to SkySpark server."""
     async with SkysparkClient(
@@ -28,7 +29,8 @@ async def test_skyspark_connection(
 
 @pytest.mark.integration
 def test_flightdeck_connection(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test connection to FlightDeck API."""
     client = APIClient(
@@ -45,7 +47,8 @@ def test_flightdeck_connection(
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_idempotent_sync(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test that running sync twice produces idempotent results.
 
@@ -121,7 +124,8 @@ async def test_idempotent_sync(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_duplicate_prevention_with_refname(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test that duplicate prevention works using refName."""
     from ace_skyspark_lib import Equipment, Site
@@ -191,7 +195,8 @@ async def test_duplicate_prevention_with_refname(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_tag_synchronization(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test that tags are properly synchronized to SkySpark."""
     from ace_skyspark_lib import Equipment, Site
@@ -268,7 +273,8 @@ async def test_tag_synchronization(
 @pytest.mark.slow
 @pytest.mark.asyncio
 async def test_hierarchical_entity_creation(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test creating site -> equipment -> point hierarchy."""
     from ace_skyspark_lib import Equipment, Site
@@ -336,7 +342,8 @@ async def test_hierarchical_entity_creation(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_read_skyspark_points(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test reading points from SkySpark."""
     async with SkysparkClient(
@@ -356,7 +363,8 @@ async def test_read_skyspark_points(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_create_and_delete_point(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test creating and deleting a point in SkySpark."""
     from ace_skyspark_lib import Equipment, Site
@@ -428,7 +436,8 @@ async def test_create_and_delete_point(
 @pytest.mark.idempotent
 @pytest.mark.asyncio
 async def test_update_preserves_haystack_ref(
-    skip_if_no_integration_config: None, env_config: dict[str, str]  # noqa: ARG001
+    skip_if_no_integration_config: None,  # noqa: ARG001
+    env_config: dict[str, str],  # noqa: ARG001
 ) -> None:
     """Test that updating a point preserves haystackRef tag."""
     from ace_skyspark_lib import Equipment, Site

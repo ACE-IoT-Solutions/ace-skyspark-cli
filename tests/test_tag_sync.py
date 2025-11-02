@@ -17,7 +17,9 @@ class TestTagSynchronization:
 
     @pytest.mark.unit
     async def test_sync_marker_tags(
-        self, mock_skyspark_client: MagicMock, sample_flightdeck_point: Any  # noqa: ARG002
+        self,
+        mock_skyspark_client: MagicMock,  # noqa: ARG002
+        sample_flightdeck_point: Any,  # noqa: ARG002
     ) -> None:
         """Test syncing marker tags from FlightDeck to SkySpark."""
         # FlightDeck uses marker_tags attribute
