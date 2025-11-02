@@ -2,12 +2,14 @@
 
 import asyncio
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 import click
 import structlog
 from ace_skyspark_lib import SkysparkClient
+from aceiot_models.api import APIClient
 
 from ace_skyspark_cli.config import Config
 from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
@@ -15,9 +17,61 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 logger: Any = None
+
+
+@asynccontextmanager
+async def create_clients(config: Config):
+    """Create ACE and SkySpark clients with proper lifecycle management.
+
+    This context manager ensures:
+    - Clients are created with proper configuration
+    - Sessions are logged when created and closed
+    - Proper cleanup even on errors
+
+    Args:
+        config: Application configuration
+
+    Yields:
+        Tuple of (ace_client, skyspark_client)
+    """
+    if not logger:
+        raise RuntimeError("Logger not initialized")
+
+    # Create ACE API client (synchronous)
+    ace_client = APIClient(
+        base_url=config.flightdeck.api_url,
+        api_key=config.flightdeck.jwt,
+        timeout=config.flightdeck.timeout,
+    )
+
+    logger.info(
+        "creating_skyspark_session",
+        url=config.skyspark.url,
+        project=config.skyspark.project,
+        pool_size=config.skyspark.pool_size,
+        timeout=config.skyspark.timeout,
+    )
+
+    # Create SkySpark client with async context manager
+    async with SkysparkClient(
+        base_url=config.skyspark.url,
+        project=config.skyspark.project,
+        username=config.skyspark.user,
+        password=config.skyspark.password,
+        timeout=config.skyspark.timeout,
+        max_retries=config.skyspark.max_retries,
+        pool_size=config.skyspark.pool_size,
+    ) as skyspark_client:
+        logger.info("skyspark_session_created")
+        try:
+            yield (ace_client, skyspark_client)
+        finally:
+            logger.info("closing_skyspark_session")
+
+    logger.info("skyspark_session_closed")
 
 
 @click.group()
@@ -161,7 +215,6 @@ async def _run_sync(
         batch_size: Override batch size for SkySpark operations
     """
     # Import at runtime to avoid circular import issues
-    from aceiot_models.api import APIClient
     from ace_skyspark_cli.sync import PointSyncService
 
     if not logger:
@@ -172,22 +225,8 @@ async def _run_sync(
         logger.info("batch_size_override", default=config.app.batch_size, override=batch_size)
         config.app.batch_size = batch_size
 
-    # Create API clients - use sync client for now since async isn't available
-    ace_client = APIClient(
-        base_url=config.flightdeck.api_url,
-        api_key=config.flightdeck.jwt,
-        timeout=config.flightdeck.timeout,
-    )
-
-    async with SkysparkClient(
-        base_url=config.skyspark.url,
-        project=config.skyspark.project,
-        username=config.skyspark.user,
-        password=config.skyspark.password,
-        timeout=config.skyspark.timeout,
-        max_retries=config.skyspark.max_retries,
-        pool_size=config.skyspark.pool_size,
-    ) as skyspark_client:
+    # Create clients with proper session management
+    async with create_clients(config) as (ace_client, skyspark_client):
         # Create sync service
         sync_service = PointSyncService(
             ace_client=ace_client,
@@ -281,28 +320,13 @@ async def _run_sync_refs_from_skyspark(
         dry_run: If True, don't make any changes
     """
     # Import at runtime to avoid circular import issues
-    from aceiot_models.api import APIClient
     from ace_skyspark_cli.sync import PointSyncService
 
     if not logger:
         raise RuntimeError("Logger not initialized")
 
-    # Create API clients
-    ace_client = APIClient(
-        base_url=config.flightdeck.api_url,
-        api_key=config.flightdeck.jwt,
-        timeout=config.flightdeck.timeout,
-    )
-
-    async with SkysparkClient(
-        base_url=config.skyspark.url,
-        project=config.skyspark.project,
-        username=config.skyspark.user,
-        password=config.skyspark.password,
-        timeout=config.skyspark.timeout,
-        max_retries=config.skyspark.max_retries,
-        pool_size=config.skyspark.pool_size,
-    ) as skyspark_client:
+    # Create clients with proper session management
+    async with create_clients(config) as (ace_client, skyspark_client):
         # Create sync service
         sync_service = PointSyncService(
             ace_client=ace_client,
@@ -351,28 +375,13 @@ async def _run_write_history(
         dry_run: If True, don't write data
     """
     # Import at runtime to avoid circular import issues
-    from aceiot_models.api import APIClient
     from ace_skyspark_cli.sync import PointSyncService
 
     if not logger:
         raise RuntimeError("Logger not initialized")
 
-    # Create API clients
-    ace_client = APIClient(
-        base_url=config.flightdeck.api_url,
-        api_key=config.flightdeck.jwt,
-        timeout=config.flightdeck.timeout,
-    )
-
-    async with SkysparkClient(
-        base_url=config.skyspark.url,
-        project=config.skyspark.project,
-        username=config.skyspark.user,
-        password=config.skyspark.password,
-        timeout=config.skyspark.timeout,
-        max_retries=config.skyspark.max_retries,
-        pool_size=config.skyspark.pool_size,
-    ) as skyspark_client:
+    # Create clients with proper session management
+    async with create_clients(config) as (ace_client, skyspark_client):
         # Create sync service
         sync_service = PointSyncService(
             ace_client=ace_client,
@@ -417,15 +426,8 @@ async def _run_debug_project_tz(config: Config) -> None:
     if not logger:
         raise RuntimeError("Logger not initialized")
 
-    async with SkysparkClient(
-        base_url=config.skyspark.url,
-        project=config.skyspark.project,
-        username=config.skyspark.user,
-        password=config.skyspark.password,
-        timeout=config.skyspark.timeout,
-        max_retries=config.skyspark.max_retries,
-        pool_size=config.skyspark.pool_size,
-    ) as skyspark_client:
+    # Create clients with proper session management
+    async with create_clients(config) as (ace_client, skyspark_client):
         # 1. Check what the about endpoint returns via session manager
         click.echo("\n=== About Endpoint ===")
         try:
@@ -480,15 +482,8 @@ async def _run_check_timezones(
     if not logger:
         raise RuntimeError("Logger not initialized")
 
-    async with SkysparkClient(
-        base_url=config.skyspark.url,
-        project=config.skyspark.project,
-        username=config.skyspark.user,
-        password=config.skyspark.password,
-        timeout=config.skyspark.timeout,
-        max_retries=config.skyspark.max_retries,
-        pool_size=config.skyspark.pool_size,
-    ) as skyspark_client:
+    # Create clients with proper session management
+    async with create_clients(config) as (ace_client, skyspark_client):
         # Read all sites
         all_sites = await skyspark_client.read_sites()
         logger.info("sites_fetched", count=len(all_sites))
