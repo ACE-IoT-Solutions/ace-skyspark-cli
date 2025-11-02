@@ -1,7 +1,7 @@
 """Tests for duplicate prevention."""
 
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -12,9 +12,7 @@ class TestDuplicateSiteDetection:
     """Test duplicate site detection and prevention."""
 
     @pytest.mark.unit
-    async def test_detect_duplicate_site_by_refname(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_detect_duplicate_site_by_refname(self, mock_skyspark_client: MagicMock) -> None:
         """Test detecting duplicate sites by refName."""
         ref_name = "building-a"
 
@@ -32,16 +30,12 @@ class TestDuplicateSiteDetection:
         assert duplicate["refName"] == ref_name
 
     @pytest.mark.unit
-    async def test_prevent_duplicate_site_creation(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_prevent_duplicate_site_creation(self, mock_skyspark_client: MagicMock) -> None:
         """Test preventing duplicate site creation."""
         ref_name = "building-a"
 
         # Check for existing
-        existing_sites = [
-            {"id": {"val": "p:aceTest:r:site-1"}, "refName": ref_name}
-        ]
+        existing_sites = [{"id": {"val": "p:aceTest:r:site-1"}, "refName": ref_name}]
         mock_skyspark_client.read.return_value = existing_sites
 
         existing = await mock_skyspark_client.read(f'site and refName=="{ref_name}"')
@@ -75,9 +69,7 @@ class TestDuplicatePointDetection:
     """Test duplicate point detection and prevention."""
 
     @pytest.mark.unit
-    async def test_detect_duplicate_point_by_refname(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_detect_duplicate_point_by_refname(self, mock_skyspark_client: MagicMock) -> None:
         """Test detecting duplicate points by refName."""
         ref_name = "temp-sensor-1"
 
@@ -94,21 +86,15 @@ class TestDuplicatePointDetection:
         assert duplicate["refName"] == ref_name
 
     @pytest.mark.unit
-    async def test_prevent_duplicate_point_creation(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_prevent_duplicate_point_creation(self, mock_skyspark_client: MagicMock) -> None:
         """Test preventing duplicate point creation."""
         ref_name = "temp-sensor-1"
 
         # Check for existing
-        existing_points = [
-            {"id": {"val": "p:aceTest:r:point-1"}, "refName": ref_name}
-        ]
+        existing_points = [{"id": {"val": "p:aceTest:r:point-1"}, "refName": ref_name}]
         mock_skyspark_client.read.return_value = existing_points
 
-        existing = await mock_skyspark_client.read(
-            f'point and refName=="{ref_name}"'
-        )
+        existing = await mock_skyspark_client.read(f'point and refName=="{ref_name}"')
 
         # Don't create if exists
         if existing:
@@ -122,9 +108,7 @@ class TestDuplicatePointDetection:
         assert point_id == "p:aceTest:r:point-1"
 
     @pytest.mark.unit
-    async def test_batch_duplicate_detection(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_batch_duplicate_detection(self, mock_skyspark_client: MagicMock) -> None:
         """Test detecting duplicates in batch operations."""
         # Points to sync
         points_to_sync = [
@@ -144,9 +128,7 @@ class TestDuplicatePointDetection:
         existing_refnames = {p["refName"] for p in existing_points}
 
         # Filter out duplicates
-        new_points = [
-            p for p in points_to_sync if p["refName"] not in existing_refnames
-        ]
+        new_points = [p for p in points_to_sync if p["refName"] not in existing_refnames]
 
         assert len(new_points) == 1
         assert new_points[0]["refName"] == "point-2"
@@ -182,14 +164,10 @@ class TestDuplicateEquipmentDetection:
         ref_name = "ahu-1"
 
         # Check for existing
-        existing_equipment = [
-            {"id": {"val": "p:aceTest:r:equip-1"}, "refName": ref_name}
-        ]
+        existing_equipment = [{"id": {"val": "p:aceTest:r:equip-1"}, "refName": ref_name}]
         mock_skyspark_client.read.return_value = existing_equipment
 
-        existing = await mock_skyspark_client.read(
-            f'equip and refName=="{ref_name}"'
-        )
+        existing = await mock_skyspark_client.read(f'equip and refName=="{ref_name}"')
 
         # Don't create if exists
         if existing:
@@ -220,9 +198,7 @@ class TestHaystackRefDuplicatePrevention:
         assert should_sync is False
 
     @pytest.mark.unit
-    async def test_missing_haystack_ref_allows_sync(
-        self, sample_flightdeck_point: Any
-    ) -> None:
+    async def test_missing_haystack_ref_allows_sync(self, sample_flightdeck_point: Any) -> None:
         """Test that missing haystackRef allows sync."""
         # Point doesn't have haystackRef
         has_ref = "haystackRef" in (sample_flightdeck_point.kv_tags or {})
@@ -235,7 +211,7 @@ class TestHaystackRefDuplicatePrevention:
     @pytest.mark.unit
     async def test_validate_haystack_ref_before_skip(
         self,
-        mock_flightdeck_client: MagicMock,
+        _mock_flightdeck_client: MagicMock,
         mock_skyspark_client: MagicMock,
     ) -> None:
         """Test validating haystackRef exists in SkySpark before skipping."""
@@ -251,7 +227,7 @@ class TestHaystackRefDuplicatePrevention:
             {"id": {"val": haystack_ref}, "dis": "Test Point"}
         ]
 
-        skyspark_entity = await mock_skyspark_client.read(f'id==@{haystack_ref}')
+        skyspark_entity = await mock_skyspark_client.read(f"id==@{haystack_ref}")
 
         # haystackRef is valid
         is_valid = len(skyspark_entity) > 0
@@ -273,7 +249,7 @@ class TestHaystackRefDuplicatePrevention:
         haystack_ref = fd_point["tags"]["haystackRef"]
         mock_skyspark_client.read.return_value = []
 
-        skyspark_entity = await mock_skyspark_client.read(f'id==@{haystack_ref}')
+        skyspark_entity = await mock_skyspark_client.read(f"id==@{haystack_ref}")
 
         # haystackRef is orphaned
         is_orphaned = len(skyspark_entity) == 0
@@ -318,7 +294,7 @@ class TestCrossEntityDuplicates:
 
     @pytest.mark.unit
     async def test_allow_same_refname_different_equipment(
-        self, mock_skyspark_client: MagicMock
+        self, _mock_skyspark_client: MagicMock
     ) -> None:
         """Test allowing same refName for points on different equipment."""
         refname = "discharge-temp"

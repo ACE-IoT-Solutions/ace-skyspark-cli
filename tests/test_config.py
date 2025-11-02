@@ -77,9 +77,7 @@ class TestConfiguration:
                 )
 
     @pytest.mark.unit
-    def test_skip_integration_when_config_missing(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_skip_integration_when_config_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test that integration tests skip when configuration is missing."""
         # Clear all test environment variables
         test_env_vars = [

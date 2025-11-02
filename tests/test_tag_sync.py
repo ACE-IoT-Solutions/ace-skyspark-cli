@@ -17,7 +17,7 @@ class TestTagSynchronization:
 
     @pytest.mark.unit
     async def test_sync_marker_tags(
-        self, mock_skyspark_client: MagicMock, sample_flightdeck_point: Any
+        self, _mock_skyspark_client: MagicMock, sample_flightdeck_point: Any
     ) -> None:
         """Test syncing marker tags from FlightDeck to SkySpark."""
         # FlightDeck uses marker_tags attribute
@@ -28,7 +28,7 @@ class TestTagSynchronization:
         assert "temp" in marker_tags
 
     @pytest.mark.unit
-    async def test_sync_kv_tags(self, mock_skyspark_client: MagicMock) -> None:
+    async def test_sync_kv_tags(self, _mock_skyspark_client: MagicMock) -> None:
         """Test syncing key-value tags from FlightDeck to SkySpark."""
         # FlightDeck tags
         fd_tags = {"sensor": None, "zone": "hvac", "floor": "2"}
@@ -41,9 +41,7 @@ class TestTagSynchronization:
         assert kv_tags["floor"] == "2"
 
     @pytest.mark.unit
-    async def test_sync_new_tags_to_existing_point(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_sync_new_tags_to_existing_point(self, mock_skyspark_client: MagicMock) -> None:
         """Test syncing new tags to existing SkySpark point."""
         point_id = "p:aceTest:r:point-123"
 
@@ -92,7 +90,7 @@ class TestTagSynchronization:
 
         # Simulate reading existing point
         mock_skyspark_client.read.return_value = [existing_point]
-        point = await mock_skyspark_client.read(f'id==@{point_id}')
+        point = await mock_skyspark_client.read(f"id==@{point_id}")
 
         # Verify existing tags present
         assert has_marker_tag(point[0], "sensor")
@@ -104,19 +102,10 @@ class TestTagRemoval:
     """Test tag removal during synchronization."""
 
     @pytest.mark.unit
-    async def test_remove_tags_not_in_flightdeck(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_remove_tags_not_in_flightdeck(self, _mock_skyspark_client: MagicMock) -> None:
         """Test removing tags that are not present in FlightDeck."""
-        point_id = "p:aceTest:r:point-123"
 
         # SkySpark has extra tags
-        skyspark_point = {
-            "id": {"val": point_id},
-            "sensor": {"_kind": "marker"},
-            "temp": {"_kind": "marker"},
-            "obsolete": {"_kind": "marker"},  # Not in FlightDeck
-        }
 
         # FlightDeck only has sensor and temp
         fd_tags = {"sensor": None, "temp": None}
@@ -147,13 +136,10 @@ class TestBidirectionalTagSync:
     """Test bidirectional tag synchronization scenarios."""
 
     @pytest.mark.unit
-    async def test_flightdeck_to_skyspark_sync(
-        self, sample_flightdeck_point: Any
-    ) -> None:
+    async def test_flightdeck_to_skyspark_sync(self, sample_flightdeck_point: Any) -> None:
         """Test syncing tags from FlightDeck to SkySpark."""
         # FlightDeck is source of truth
         marker_tags = sample_flightdeck_point.marker_tags
-        kv_tags = sample_flightdeck_point.kv_tags
 
         # These tags should be synced to SkySpark
         assert len(marker_tags) > 0
@@ -169,9 +155,7 @@ class TestBidirectionalTagSync:
 
         # Only haystackRef should be synced back
         mock_flightdeck_client.update_point = AsyncMock()
-        await mock_flightdeck_client.update_point(
-            point_id, tags={"haystackRef": skyspark_id}
-        )
+        await mock_flightdeck_client.update_point(point_id, tags={"haystackRef": skyspark_id})
 
         # Verify only haystackRef updated
         call_args = mock_flightdeck_client.update_point.call_args
@@ -190,7 +174,6 @@ class TestTagConflictResolution:
         fd_value = "zone-a"
 
         # SkySpark tag (different value)
-        ss_value = "zone-b"
 
         # FlightDeck should win
         final_value = fd_value
@@ -204,7 +187,6 @@ class TestTagConflictResolution:
         fd_tags = {"sensor", "temp", "fd_specific"}
 
         # SkySpark tags
-        ss_tags = {"sensor", "temp", "ss_specific"}
 
         # Merge (FlightDeck is source of truth)
         # In actual implementation, FlightDeck tags replace SkySpark
@@ -224,7 +206,7 @@ class TestTagValidation:
         # Valid marker tags (None or empty string)
         valid_markers = {"sensor": None, "temp": None}
 
-        for tag, value in valid_markers.items():
+        for _tag, value in valid_markers.items():
             is_marker = value is None or value == ""
             assert is_marker is True
 
@@ -234,7 +216,7 @@ class TestTagValidation:
         # Valid KV tags (non-None values)
         valid_kvs = {"zone": "hvac", "floor": "2", "priority": "high"}
 
-        for tag, value in valid_kvs.items():
+        for _tag, value in valid_kvs.items():
             is_kv = value is not None and value != ""
             assert is_kv is True
 
@@ -259,14 +241,11 @@ class TestTagSyncBatching:
     """Test batching tag synchronization operations."""
 
     @pytest.mark.unit
-    async def test_batch_tag_updates(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_batch_tag_updates(self, mock_skyspark_client: MagicMock) -> None:
         """Test batching multiple tag updates together."""
         # Multiple points to update
         point_updates = [
-            {"id": f"p:aceTest:r:point-{i}", "tags": {"updated": None}}
-            for i in range(10)
+            {"id": f"p:aceTest:r:point-{i}", "tags": {"updated": None}} for i in range(10)
         ]
 
         # Batch update

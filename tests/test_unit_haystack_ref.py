@@ -21,9 +21,7 @@ class TestHaystackRefTagging:
         mock_flightdeck_client.update_point = AsyncMock()
 
         # Simulate tagging operation
-        await mock_flightdeck_client.update_point(
-            point_id, tags={"haystackRef": skyspark_id}
-        )
+        await mock_flightdeck_client.update_point(point_id, tags={"haystackRef": skyspark_id})
 
         # Verify the update was called correctly
         mock_flightdeck_client.update_point.assert_called_once_with(
@@ -148,7 +146,7 @@ class TestHaystackRefSynchronization:
     @pytest.mark.unit
     async def test_sync_existing_point_uses_mapping(
         self,
-        mock_flightdeck_client: MagicMock,
+        _mock_flightdeck_client: MagicMock,
         mock_skyspark_client: MagicMock,
     ) -> None:
         """Test that syncing existing point uses haystackRef mapping."""
@@ -164,7 +162,7 @@ class TestHaystackRefSynchronization:
 
         # Simulate lookup by haystackRef
         haystack_ref = flightdeck_point["tags"]["haystackRef"]
-        results = await mock_skyspark_client.read(f'id==@{haystack_ref}')
+        results = await mock_skyspark_client.read(f"id==@{haystack_ref}")
 
         # Verify existing point found
         assert len(results) == 1
@@ -190,8 +188,7 @@ class TestHaystackRefSynchronization:
         # Find orphaned refs
         skyspark_ids = {p["id"]["val"] for p in skyspark_points}
         orphaned = [
-            p for p in flightdeck_points
-            if p["tags"].get("haystackRef") not in skyspark_ids
+            p for p in flightdeck_points if p["tags"].get("haystackRef") not in skyspark_ids
         ]
 
         assert len(orphaned) == 1

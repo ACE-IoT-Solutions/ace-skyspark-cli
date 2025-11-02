@@ -54,9 +54,7 @@ def has_marker_tag(entity: dict[str, Any], tag: str) -> bool:
     tag_value = entity.get(tag)
     if tag_value is None:
         return False
-    if isinstance(tag_value, dict) and tag_value.get("_kind") == "marker":
-        return True
-    return False
+    return bool(isinstance(tag_value, dict) and tag_value.get("_kind") == "marker")
 
 
 def get_kv_tag(entity: dict[str, Any], tag: str) -> Any:

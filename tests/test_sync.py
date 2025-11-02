@@ -1,14 +1,13 @@
 """Tests for synchronization service with idempotency."""
 
-from unittest.mock import AsyncMock, MagicMock
-from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
-from aceiot_models.points import Point as ACEPoint
 from ace_skyspark_lib import Point
+from aceiot_models.points import Point as ACEPoint
 
-from ace_skyspark_cli.sync import PointSyncService, SyncResult
 from ace_skyspark_cli.config import Config
+from ace_skyspark_cli.sync import PointSyncService, SyncResult
 
 
 class TestSyncResult:

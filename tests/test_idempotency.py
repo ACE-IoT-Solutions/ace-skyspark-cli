@@ -11,9 +11,7 @@ class TestIdempotentSiteCreation:
 
     @pytest.mark.unit
     @pytest.mark.idempotent
-    async def test_create_site_once_only(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_create_site_once_only(self, mock_skyspark_client: MagicMock) -> None:
         """Test that site is created only once, subsequent calls find existing."""
         ref_name = "test-site-123"
 
@@ -39,9 +37,7 @@ class TestIdempotentSiteCreation:
 
     @pytest.mark.unit
     @pytest.mark.idempotent
-    async def test_find_or_create_pattern(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_find_or_create_pattern(self, mock_skyspark_client: MagicMock) -> None:
         """Test find-or-create pattern for idempotency."""
         ref_name = "site-xyz"
 
@@ -76,9 +72,7 @@ class TestIdempotentPointCreation:
 
         # First attempt: no existing point
         mock_skyspark_client.read.return_value = []
-        existing = await mock_skyspark_client.read(
-            f'point and refName=="{ref_name}"'
-        )
+        existing = await mock_skyspark_client.read(f'point and refName=="{ref_name}"')
         assert len(existing) == 0
 
         # Create point
@@ -89,12 +83,8 @@ class TestIdempotentPointCreation:
         point_id = created[0]["id"]["val"]
 
         # Second attempt: point exists
-        mock_skyspark_client.read.return_value = [
-            {"id": {"val": point_id}, "refName": ref_name}
-        ]
-        existing2 = await mock_skyspark_client.read(
-            f'point and refName=="{ref_name}"'
-        )
+        mock_skyspark_client.read.return_value = [{"id": {"val": point_id}, "refName": ref_name}]
+        existing2 = await mock_skyspark_client.read(f'point and refName=="{ref_name}"')
         assert len(existing2) == 1
         assert existing2[0]["id"]["val"] == point_id
 
@@ -105,9 +95,7 @@ class TestIdempotentPointCreation:
     ) -> None:
         """Test that haystackRef tag ensures idempotent operations."""
         # Point has haystackRef
-        haystack_ref = (sample_flightdeck_point_with_haystack_ref.kv_tags or {}).get(
-            "haystackRef"
-        )
+        haystack_ref = (sample_flightdeck_point_with_haystack_ref.kv_tags or {}).get("haystackRef")
         assert haystack_ref is not None
 
         # This reference can be used to find existing entity
@@ -128,9 +116,7 @@ class TestIdempotentTagSynchronization:
         tags = {"sensor": {"_kind": "marker"}, "temp": {"_kind": "marker"}}
 
         # First sync
-        mock_skyspark_client.update_points.return_value = [
-            {"id": {"val": point_id}, **tags}
-        ]
+        mock_skyspark_client.update_points.return_value = [{"id": {"val": point_id}, **tags}]
         result1 = await mock_skyspark_client.update_points([])
 
         # Second sync (same tags)
@@ -141,9 +127,7 @@ class TestIdempotentTagSynchronization:
 
     @pytest.mark.unit
     @pytest.mark.idempotent
-    async def test_adding_tags_is_idempotent(
-        self, mock_skyspark_client: MagicMock
-    ) -> None:
+    async def test_adding_tags_is_idempotent(self, mock_skyspark_client: MagicMock) -> None:
         """Test that adding the same tag multiple times is idempotent."""
         point_id = "p:aceTest:r:point-123"
 
@@ -155,11 +139,10 @@ class TestIdempotentTagSynchronization:
             }
         ]
 
-        existing = await mock_skyspark_client.read(f'id==@{point_id}')
-        initial_tags = set(
-            k for k, v in existing[0].items()
-            if isinstance(v, dict) and v.get("_kind") == "marker"
-        )
+        existing = await mock_skyspark_client.read(f"id==@{point_id}")
+        initial_tags = {
+            k for k, v in existing[0].items() if isinstance(v, dict) and v.get("_kind") == "marker"
+        }
 
         # Add "sensor" tag again (already exists)
         mock_skyspark_client.update_points.return_value = [
@@ -177,11 +160,10 @@ class TestIdempotentTagSynchronization:
                 "sensor": {"_kind": "marker"},
             }
         ]
-        after = await mock_skyspark_client.read(f'id==@{point_id}')
-        after_tags = set(
-            k for k, v in after[0].items()
-            if isinstance(v, dict) and v.get("_kind") == "marker"
-        )
+        after = await mock_skyspark_client.read(f"id==@{point_id}")
+        after_tags = {
+            k for k, v in after[0].items() if isinstance(v, dict) and v.get("_kind") == "marker"
+        }
 
         assert initial_tags == after_tags
 
@@ -191,23 +173,17 @@ class TestIdempotentHaystackRefUpdate:
 
     @pytest.mark.unit
     @pytest.mark.idempotent
-    async def test_update_haystack_ref_idempotent(
-        self, mock_flightdeck_client: MagicMock
-    ) -> None:
+    async def test_update_haystack_ref_idempotent(self, mock_flightdeck_client: MagicMock) -> None:
         """Test that updating haystackRef multiple times is safe."""
         point_id = "flightdeck-point-1"
         skyspark_id = "p:aceTest:r:point-123"
 
         # First update
         mock_flightdeck_client.update_point = AsyncMock()
-        await mock_flightdeck_client.update_point(
-            point_id, tags={"haystackRef": skyspark_id}
-        )
+        await mock_flightdeck_client.update_point(point_id, tags={"haystackRef": skyspark_id})
 
         # Second update (same value)
-        await mock_flightdeck_client.update_point(
-            point_id, tags={"haystackRef": skyspark_id}
-        )
+        await mock_flightdeck_client.update_point(point_id, tags={"haystackRef": skyspark_id})
 
         # Should be safe and result in same state
         assert mock_flightdeck_client.update_point.call_count == 2
@@ -218,16 +194,11 @@ class TestIdempotentHaystackRefUpdate:
         self, sample_flightdeck_point_with_haystack_ref: Any
     ) -> None:
         """Test that updates are skipped if haystackRef is already correct."""
-        existing_ref = sample_flightdeck_point_with_haystack_ref.kv_tags.get(
-            "haystackRef"
-        )
+        existing_ref = sample_flightdeck_point_with_haystack_ref.kv_tags.get("haystackRef")
         target_ref = "p:aceTest:r:skyspark-id-456"
 
         # If refs match, no update needed
-        if existing_ref == target_ref:
-            update_needed = False
-        else:
-            update_needed = True
+        update_needed = existing_ref != target_ref
 
         assert update_needed is False
 
@@ -278,31 +249,14 @@ class TestIdempotentFullSync:
     @pytest.mark.idempotent
     async def test_interrupted_sync_can_resume(
         self,
-        mock_flightdeck_client: MagicMock,
-        mock_skyspark_client: MagicMock,
+        _mock_flightdeck_client: MagicMock,
+        _mock_skyspark_client: MagicMock,
     ) -> None:
         """Test that interrupted sync can resume without duplicates."""
         # Scenario: 5 points, first 3 synced before interruption
-        all_points = [{"id": f"fd-{i}", "name": f"Point {i}"} for i in range(5)]
+        [{"id": f"fd-{i}", "name": f"Point {i}"} for i in range(5)]
 
         # Already synced (have haystackRef)
-        synced_points = [
-            {
-                "id": "fd-0",
-                "name": "Point 0",
-                "tags": {"haystackRef": "p:aceTest:r:point-0"},
-            },
-            {
-                "id": "fd-1",
-                "name": "Point 1",
-                "tags": {"haystackRef": "p:aceTest:r:point-1"},
-            },
-            {
-                "id": "fd-2",
-                "name": "Point 2",
-                "tags": {"haystackRef": "p:aceTest:r:point-2"},
-            },
-        ]
 
         # Not yet synced
         unsynced_points = [
