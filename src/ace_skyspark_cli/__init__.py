@@ -17,7 +17,7 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.9.1"
+__version__ = "0.10.0"
 
 logger: Any = None
 
@@ -120,34 +120,48 @@ def cli(ctx: click.Context, env_file: Path, log_level: str, json_logs: bool) -> 
 
 @cli.command()
 @click.option(
+    "--job-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to job configuration file (YAML/JSON)",
+)
+@click.option(
     "--site",
-    required=True,
-    help="Site name to synchronize",
+    required=False,
+    help="Site name to synchronize (overrides job file)",
 )
 @click.option(
     "--dry-run",
     is_flag=True,
-    help="Perform a dry run without making changes",
+    help="Perform a dry run without making changes (overrides job file)",
 )
 @click.option(
     "--limit",
     type=int,
     default=None,
-    help="Limit the number of points to sync (sorted by name for idempotency)",
+    help="Limit the number of points to sync (overrides job file)",
 )
 @click.option(
     "--sync-all",
     is_flag=True,
-    help="Sync all points including non-configured (default: only configured/collected points)",
+    help="Sync all points including non-configured (overrides job file)",
 )
 @click.option(
     "--batch-size",
     type=int,
     default=None,
-    help="Override batch size for SkySpark operations (default: 500)",
+    help="Override batch size for SkySpark operations (overrides job file)",
 )
 @click.pass_obj
-def sync(config: Config, site: str, dry_run: bool, limit: int | None, sync_all: bool, batch_size: int | None) -> None:
+def sync(
+    config: Config,
+    job_file: str | None,
+    site: str | None,
+    dry_run: bool,
+    limit: int | None,
+    sync_all: bool,
+    batch_size: int | None,
+) -> None:
     """Synchronize points from FlightDeck to SkySpark for a specific site.
 
     This command:
@@ -183,7 +197,43 @@ def sync(config: Config, site: str, dry_run: bool, limit: int | None, sync_all: 
         click.echo("Logger not initialized", err=True)
         sys.exit(1)
 
-    logger.info("sync_command_start", site=site, dry_run=dry_run, limit=limit, sync_all=sync_all, batch_size=batch_size)
+    # Load job file if provided and merge with CLI args (CLI takes precedence)
+    if job_file:
+        from ace_skyspark_cli.job_config import JobFile
+
+        try:
+            job_config_obj = JobFile.from_file(job_file)
+            if not job_config_obj.sync:
+                click.echo("Error: Job file does not contain 'sync' configuration", err=True)
+                sys.exit(1)
+
+            job_sync = job_config_obj.sync
+            # CLI args override job file (only if explicitly provided)
+            site = site or job_sync.site
+            dry_run = dry_run or job_sync.dry_run
+            limit = limit if limit is not None else job_sync.limit
+            sync_all = sync_all or job_sync.sync_all
+            batch_size = batch_size if batch_size is not None else job_sync.batch_size
+
+            logger.info("job_file_loaded", path=job_file)
+        except Exception as e:
+            click.echo(f"Error loading job file: {e}", err=True)
+            sys.exit(1)
+
+    # Validate required parameters
+    if not site:
+        click.echo("Error: --site is required (or provide via job file)", err=True)
+        sys.exit(1)
+
+    logger.info(
+        "sync_command_start",
+        site=site,
+        dry_run=dry_run,
+        limit=limit,
+        sync_all=sync_all,
+        batch_size=batch_size,
+        job_file=job_file,
+    )
 
     try:
         # Run async sync operation
@@ -811,6 +861,94 @@ SKYSPARK_PASSWORD=your-password
         click.echo("  3. Run: ace-skyspark-cli sync --site <site-name> --dry-run")
     except Exception as e:
         click.echo(f"Error creating {env_file}: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.option(
+    "--command",
+    type=click.Choice(["sync", "sync-refs", "write-history", "check-timezones", "all"]),
+    default="all",
+    help="Command to generate template for (default: all)",
+)
+@click.option(
+    "--output",
+    type=click.Path(),
+    default="job-config.yaml",
+    help="Output file path (default: job-config.yaml)",
+)
+@click.option(
+    "--format",
+    type=click.Choice(["yaml", "json"]),
+    default="yaml",
+    help="Output format (default: yaml)",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Overwrite existing file",
+)
+def generate_job_template(command: str, output: str, format: str, force: bool) -> None:
+    """Generate job configuration file template.
+
+    Creates a template job configuration file for running commands
+    with predefined parameters. Supports YAML and JSON formats.
+
+    Examples:
+        ace-skyspark-cli generate-job-template
+        ace-skyspark-cli generate-job-template --command sync
+        ace-skyspark-cli generate-job-template --format json --output my-job.json
+        ace-skyspark-cli generate-job-template --force
+    """
+    from pathlib import Path
+
+    from ace_skyspark_cli.job_config import (
+        generate_check_timezones_template,
+        generate_full_template,
+        generate_sync_refs_template,
+        generate_sync_template,
+        generate_write_history_template,
+    )
+
+    output_path = Path(output)
+
+    # Check if file exists
+    if output_path.exists() and not force:
+        click.echo(f"Error: {output_path} already exists. Use --force to overwrite.", err=True)
+        sys.exit(1)
+
+    # Generate template based on command
+    if command == "sync":
+        template = generate_sync_template()
+    elif command == "sync-refs":
+        template = generate_sync_refs_template()
+    elif command == "write-history":
+        template = generate_write_history_template()
+    elif command == "check-timezones":
+        template = generate_check_timezones_template()
+    else:  # all
+        template = generate_full_template()
+
+    # Write template to file
+    try:
+        if format == "yaml":
+            import yaml
+
+            with output_path.open("w") as f:
+                yaml.safe_dump(template, f, default_flow_style=False, sort_keys=False)
+        else:  # json
+            import json
+
+            with output_path.open("w") as f:
+                json.dump(template, f, indent=2)
+
+        click.echo(f"✓ Generated {command} job template: {output_path}")
+        click.echo("\nNext steps:")
+        click.echo(f"  1. Edit {output_path} with your parameters")
+        click.echo(f"  2. Run: ace-skyspark-cli {command.replace('-', '_').replace('_refs', '-refs-from-skyspark')} --job-file {output_path}")
+
+    except Exception as e:
+        click.echo(f"Error generating template: {e}", err=True)
         sys.exit(1)
 
 
