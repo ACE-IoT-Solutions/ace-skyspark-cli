@@ -249,8 +249,8 @@ class TestIdempotentFullSync:
     @pytest.mark.idempotent
     async def test_interrupted_sync_can_resume(
         self,
-        _mock_flightdeck_client: MagicMock,
-        _mock_skyspark_client: MagicMock,
+        mock_flightdeck_client: MagicMock,  # noqa: ARG002
+        mock_skyspark_client: MagicMock,  # noqa: ARG002
     ) -> None:
         """Test that interrupted sync can resume without duplicates."""
         # Scenario: 5 points, first 3 synced before interruption

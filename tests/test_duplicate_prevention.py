@@ -211,7 +211,7 @@ class TestHaystackRefDuplicatePrevention:
     @pytest.mark.unit
     async def test_validate_haystack_ref_before_skip(
         self,
-        _mock_flightdeck_client: MagicMock,
+        mock_flightdeck_client: MagicMock,  # noqa: ARG002
         mock_skyspark_client: MagicMock,
     ) -> None:
         """Test validating haystackRef exists in SkySpark before skipping."""
@@ -294,7 +294,7 @@ class TestCrossEntityDuplicates:
 
     @pytest.mark.unit
     async def test_allow_same_refname_different_equipment(
-        self, _mock_skyspark_client: MagicMock
+        self, mock_skyspark_client: MagicMock  # noqa: ARG002
     ) -> None:
         """Test allowing same refName for points on different equipment."""
         refname = "discharge-temp"

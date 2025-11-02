@@ -146,7 +146,7 @@ class TestHaystackRefSynchronization:
     @pytest.mark.unit
     async def test_sync_existing_point_uses_mapping(
         self,
-        _mock_flightdeck_client: MagicMock,
+        mock_flightdeck_client: MagicMock,  # noqa: ARG002
         mock_skyspark_client: MagicMock,
     ) -> None:
         """Test that syncing existing point uses haystackRef mapping."""

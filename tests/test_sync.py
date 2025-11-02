@@ -107,7 +107,7 @@ class TestPointSyncService:
             site_id=1,
             client_id=1,
             kv_tags={},
-        )
+        ).model_dump()
 
         ref = service._get_haystack_ref(ace_point)
         assert ref is None
@@ -125,7 +125,7 @@ class TestPointSyncService:
             site_id=1,
             client_id=1,
             kv_tags={"haystackRef": "sky-123"},
-        )
+        ).model_dump()
 
         ref = service._get_haystack_ref(ace_point)
         assert ref == "sky-123"
@@ -144,9 +144,13 @@ class TestPointSyncService:
             client_id=1,
             marker_tags=["sensor", "temp"],
             kv_tags={"unit": "degF", "kind": "Number"},
-        )
+        ).model_dump()
 
-        sky_point = service._prepare_point_create(ace_point)
+        site_ref = "@site-123"
+        equipment_ref_map = {}
+        site_tz = "America/New_York"
+
+        sky_point = service._prepare_point_create(ace_point, site_ref, equipment_ref_map, site_tz)
         assert sky_point.dis == "Temperature Sensor"
         assert "point" in sky_point.marker_tags
         assert "sensor" in sky_point.marker_tags
@@ -166,14 +170,20 @@ class TestPointSyncService:
             client_id=1,
             marker_tags=["sensor", "temp", "updated"],
             kv_tags={"unit": "degC"},
-        )
+        ).model_dump()
 
         existing_sky_point = {
             "id": {"val": "@point-123"},
             "dis": "Temperature Sensor",
         }
 
-        sky_point = service._prepare_point_update(ace_point, existing_sky_point)
+        site_ref = "@site-123"
+        equipment_ref_map = {}
+        site_tz = "America/New_York"
+
+        sky_point = service._prepare_point_update(
+            ace_point, existing_sky_point, site_ref, equipment_ref_map, site_tz
+        )
         assert sky_point.id == "point-123"
         assert sky_point.dis == "Temperature Sensor Updated"
 
@@ -273,7 +283,7 @@ class TestIdempotency:
             site_id=1,
             client_id=1,
             kv_tags={"haystackRef": "sky-123"},
-        )
+        ).model_dump()
 
         skyspark_points = [
             {

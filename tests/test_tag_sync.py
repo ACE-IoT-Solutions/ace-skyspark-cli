@@ -17,7 +17,7 @@ class TestTagSynchronization:
 
     @pytest.mark.unit
     async def test_sync_marker_tags(
-        self, _mock_skyspark_client: MagicMock, sample_flightdeck_point: Any
+        self, mock_skyspark_client: MagicMock, sample_flightdeck_point: Any  # noqa: ARG002
     ) -> None:
         """Test syncing marker tags from FlightDeck to SkySpark."""
         # FlightDeck uses marker_tags attribute
@@ -28,7 +28,7 @@ class TestTagSynchronization:
         assert "temp" in marker_tags
 
     @pytest.mark.unit
-    async def test_sync_kv_tags(self, _mock_skyspark_client: MagicMock) -> None:
+    async def test_sync_kv_tags(self, mock_skyspark_client: MagicMock) -> None:  # noqa: ARG002
         """Test syncing key-value tags from FlightDeck to SkySpark."""
         # FlightDeck tags
         fd_tags = {"sensor": None, "zone": "hvac", "floor": "2"}
@@ -102,7 +102,7 @@ class TestTagRemoval:
     """Test tag removal during synchronization."""
 
     @pytest.mark.unit
-    async def test_remove_tags_not_in_flightdeck(self, _mock_skyspark_client: MagicMock) -> None:
+    async def test_remove_tags_not_in_flightdeck(self, mock_skyspark_client: MagicMock) -> None:  # noqa: ARG002
         """Test removing tags that are not present in FlightDeck."""
 
         # SkySpark has extra tags

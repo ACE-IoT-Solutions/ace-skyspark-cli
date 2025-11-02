@@ -72,7 +72,7 @@ class SyncResult:
 class PointSyncService:
     """Service for synchronizing points from ACE to SkySpark."""
 
-    HAYSTACK_REF_TAG = "haystack_entityRef"
+    HAYSTACK_REF_TAG = "haystackRef"
 
     def __init__(
         self,
@@ -679,29 +679,31 @@ class PointSyncService:
         )
 
     def _build_ref_map(self, skyspark_points: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-        """Build a map of SkySpark point ID -> SkySpark point.
+        """Build a map of haystackRef -> SkySpark point for points synced from ACE.
 
-        The haystackRef is stored in FlightDeck and contains the SkySpark point ID.
-        This map allows us to look up SkySpark points by their ID.
+        Only includes points that have a haystackRef tag, which indicates they were
+        synced from ACE. This allows us to look up SkySpark points by the ACE ref.
 
         Args:
             skyspark_points: List of SkySpark points
 
         Returns:
-            Dictionary mapping SkySpark point ID to point data
+            Dictionary mapping haystackRef value to point data
         """
         ref_map: dict[str, dict[str, Any]] = {}
 
         for point in skyspark_points:
-            # Extract SkySpark point ID
-            point_id = point.get("id", {})
-            if isinstance(point_id, dict):
-                point_id_val = point_id.get("val", "").lstrip("@")
-            else:
-                point_id_val = str(point_id).lstrip("@")
+            # Only include points that have haystackRef (synced from ACE)
+            haystack_ref = point.get("haystackRef")
+            if not haystack_ref:
+                continue
 
-            if point_id_val:
-                ref_map[point_id_val] = point
+            # Extract the ref value if it's in Zinc format
+            if isinstance(haystack_ref, dict):
+                haystack_ref = haystack_ref.get("val", "")
+
+            if haystack_ref:
+                ref_map[haystack_ref] = point
 
         logger.debug("ref_map_built", count=len(ref_map))
         return ref_map
