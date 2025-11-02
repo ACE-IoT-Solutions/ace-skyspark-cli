@@ -1,6 +1,6 @@
 [project]
 name = "ace-skyspark-cli"
-version = "0.11.1"
+version = "0.11.2"
 description = "CLI tool for synchronizing points, equipment, and entities from ACE FlightDeck to SkySpark"
 readme = "README.md"
 license = { text = "MIT" }
@@ -22,7 +22,7 @@ classifiers = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "ace-skyspark-lib",
+    "ace-skyspark-lib>=0.1.8",
     "aceiot-models>=0.3.4",
     "click>=8.3.0",
     "pydantic>=2.12.3",
@@ -56,8 +56,9 @@ dev = [
     "python-dotenv>=1.0.0",
 ]
 
-[tool.uv.sources]
-ace-skyspark-lib = { path = "../ace-skyspark-lib" }
+# Uncomment for local development with ace-skyspark-lib
+# [tool.uv.sources]
+# ace-skyspark-lib = { path = "../ace-skyspark-lib" }
 
 [tool.ruff]
 line-length = 100
