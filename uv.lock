@@ -4,7 +4,7 @@ requires-python = ">=3.13"
 
 [[package]]
 name = "ace-skyspark-cli"
-version = "0.7.10"
+version = "0.11.1"
 source = { editable = "." }
 dependencies = [
     { name = "ace-skyspark-lib" },
@@ -12,6 +12,7 @@ dependencies = [
     { name = "click" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyyaml" },
 ]
 
 [package.dev-dependencies]
@@ -34,6 +35,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.3.0" },
     { name = "pydantic", specifier = ">=2.12.3" },
     { name = "pydantic-settings", specifier = ">=2.7.4" },
+    { name = "pyyaml", specifier = ">=6.0.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -51,7 +53,7 @@ dev = [
 
 [[package]]
 name = "ace-skyspark-lib"
-version = "0.1.4"
+version = "0.1.8"
 source = { directory = "../ace-skyspark-lib" }
 dependencies = [
     { name = "aceiot-models" },

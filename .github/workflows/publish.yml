@@ -1,0 +1,129 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Publish target'
+        required: true
+        type: choice
+        options:
+          - testpypi
+          - pypi
+        default: testpypi
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.13"]
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+
+    - name: Install dependencies
+      run: |
+        uv sync --all-extras --group dev
+
+    - name: Run tests
+      env:
+        FLIGHTDECK_JWT: ${{ secrets.FLIGHTDECK_JWT }}
+        FLIGHTDECK_API_URL: ${{ secrets.FLIGHTDECK_API_URL }}
+        SKYSPARK_URL: ${{ secrets.SKYSPARK_URL }}
+        SKYSPARK_PROJECT: ${{ secrets.SKYSPARK_PROJECT }}
+        SKYSPARK_USER: ${{ secrets.SKYSPARK_USER }}
+        SKYSPARK_PASSWORD: ${{ secrets.SKYSPARK_PASSWORD }}
+      run: |
+        uv run pytest -v -m unit
+
+    - name: Run linting
+      run: |
+        uv run ruff check .
+        uv run ruff format --check .
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+
+    - name: Build package
+      run: |
+        uv build
+
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+  publish-to-testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'push' && contains(github.ref, 'refs/tags/')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'testpypi') ||
+      (github.event_name == 'release' && contains(github.event.release.tag_name, '-test'))
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/ace-skyspark-cli
+    permissions:
+      id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+    - name: Publish to TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+        skip-existing: true
+
+  publish-to-pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'release' && github.event.action == 'published' && !contains(github.event.release.tag_name, '-test')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.target == 'pypi')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/ace-skyspark-cli
+    permissions:
+      id-token: write  # IMPORTANT: this permission is mandatory for trusted publishing
+
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1

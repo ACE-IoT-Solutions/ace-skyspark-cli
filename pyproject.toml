@@ -1,10 +1,24 @@
 [project]
 name = "ace-skyspark-cli"
-version = "0.10.0"
-description = "Add your description here"
+version = "0.11.1"
+description = "CLI tool for synchronizing points, equipment, and entities from ACE FlightDeck to SkySpark"
 readme = "README.md"
+license = { text = "MIT" }
 authors = [
     { name = "Andrew Rodgers", email = "andrew@aceiotsolutions.com" }
+]
+keywords = ["skyspark", "haystack", "iot", "building-automation", "ace", "flightdeck", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Topic :: System :: Monitoring",
+    "Topic :: Utilities",
 ]
 requires-python = ">=3.13"
 dependencies = [
@@ -15,6 +29,12 @@ dependencies = [
     "pydantic-settings>=2.7.4",
     "pyyaml>=6.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/ACE-IoT-Solutions/ace-skyspark-cli"
+Documentation = "https://github.com/ACE-IoT-Solutions/ace-skyspark-cli/blob/main/JOB_CONFIG_GUIDE.md"
+Repository = "https://github.com/ACE-IoT-Solutions/ace-skyspark-cli"
+Issues = "https://github.com/ACE-IoT-Solutions/ace-skyspark-cli/issues"
 
 [project.scripts]
 ace-skyspark-cli = "ace_skyspark_cli:main"

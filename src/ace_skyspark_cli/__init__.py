@@ -17,7 +17,7 @@ from ace_skyspark_cli.logging import configure_logging, get_logger, log_config
 if TYPE_CHECKING:
     from ace_skyspark_cli.sync import PointSyncService
 
-__version__ = "0.10.0"
+__version__ = "0.11.1"
 
 logger: Any = None
 
@@ -74,6 +74,61 @@ async def create_clients(config: Config):
     logger.info("skyspark_session_closed")
 
 
+def merge_credentials_and_create_config(
+    ctx: click.Context, job_file: str | None = None
+) -> Config:
+    """Merge credentials from CLI args, job file, and env vars, then create Config.
+
+    Precedence: CLI args > Job file > Environment variables > Defaults
+
+    Args:
+        ctx: Click context with cli_overrides and env_file
+        job_file: Optional path to job file
+
+    Returns:
+        Config instance with merged credentials
+    """
+    from ace_skyspark_cli.job_config import JobFile
+
+    # Get CLI overrides and env_file from context
+    cli_overrides = ctx.obj.get("cli_overrides", {})
+    env_file = ctx.obj.get("env_file")
+
+    # Start with empty job file overrides
+    job_overrides = {}
+
+    # Load job file if provided and extract credentials
+    if job_file:
+        try:
+            job_config = JobFile.from_file(job_file)
+            if job_config.credentials:
+                # Convert credentials to dict, excluding None values
+                creds_dict = job_config.credentials.model_dump(exclude_none=True)
+                job_overrides.update(creds_dict)
+        except Exception as e:
+            logger.error("job_file_load_failed", path=job_file, error=str(e))
+            click.echo(f"Error loading job file: {e}", err=True)
+            sys.exit(1)
+
+    # Merge credentials: CLI > Job file > Env
+    merged_overrides = {**job_overrides, **cli_overrides}
+
+    # Create config with merged overrides
+    try:
+        config = Config.from_env(str(env_file) if env_file else None, overrides=merged_overrides)
+
+        # Log configuration (with sensitive data masked) - only once per command
+        if merged_overrides:
+            logger.info("credentials_overridden", sources=list(merged_overrides.keys()))
+        log_config(config.to_dict())
+
+        return config
+    except Exception as e:
+        logger.error("config_load_failed", error=str(e))
+        click.echo(f"Error loading configuration: {e}", err=True)
+        sys.exit(1)
+
+
 @click.group()
 @click.option(
     "--env-file",
@@ -92,8 +147,51 @@ async def create_clients(config: Config):
     is_flag=True,
     help="Output logs in JSON format",
 )
+# FlightDeck credential options
+@click.option(
+    "--flightdeck-api-url",
+    default=None,
+    help="FlightDeck API URL (overrides env/job file)",
+)
+@click.option(
+    "--flightdeck-jwt",
+    default=None,
+    help="FlightDeck JWT token (overrides env/job file)",
+)
+# SkySpark credential options
+@click.option(
+    "--skyspark-url",
+    default=None,
+    help="SkySpark server URL (overrides env/job file)",
+)
+@click.option(
+    "--skyspark-project",
+    default=None,
+    help="SkySpark project name (overrides env/job file)",
+)
+@click.option(
+    "--skyspark-user",
+    default=None,
+    help="SkySpark username (overrides env/job file)",
+)
+@click.option(
+    "--skyspark-password",
+    default=None,
+    help="SkySpark password (overrides env/job file)",
+)
 @click.pass_context
-def cli(ctx: click.Context, env_file: Path, log_level: str, json_logs: bool) -> None:
+def cli(
+    ctx: click.Context,
+    env_file: Path,
+    log_level: str,
+    json_logs: bool,
+    flightdeck_api_url: str | None,
+    flightdeck_jwt: str | None,
+    skyspark_url: str | None,
+    skyspark_project: str | None,
+    skyspark_user: str | None,
+    skyspark_password: str | None,
+) -> None:
     """ACE SkySpark CLI - Synchronize points from FlightDeck to SkySpark.
 
     This tool provides idempotent synchronization of points, equipment, and entities
@@ -105,17 +203,26 @@ def cli(ctx: click.Context, env_file: Path, log_level: str, json_logs: bool) -> 
     configure_logging(log_level=log_level, json_format=json_logs)
     logger = get_logger(__name__)
 
-    # Load configuration
-    try:
-        config = Config.from_env(str(env_file) if env_file else None)
-        ctx.obj = config
+    # Collect CLI credential overrides
+    cli_overrides = {}
+    if flightdeck_api_url:
+        cli_overrides["flightdeck_api_url"] = flightdeck_api_url
+    if flightdeck_jwt:
+        cli_overrides["flightdeck_jwt"] = flightdeck_jwt
+    if skyspark_url:
+        cli_overrides["skyspark_url"] = skyspark_url
+    if skyspark_project:
+        cli_overrides["skyspark_project"] = skyspark_project
+    if skyspark_user:
+        cli_overrides["skyspark_user"] = skyspark_user
+    if skyspark_password:
+        cli_overrides["skyspark_password"] = skyspark_password
 
-        # Log configuration (with sensitive data masked)
-        log_config(config.to_dict())
-
-    except Exception as e:
-        logger.error("config_load_failed", error=str(e))
-        sys.exit(1)
+    # Store CLI overrides and env_file in context for subcommands
+    ctx.obj = {
+        "env_file": env_file,
+        "cli_overrides": cli_overrides,
+    }
 
 
 @cli.command()
@@ -152,9 +259,9 @@ def cli(ctx: click.Context, env_file: Path, log_level: str, json_logs: bool) -> 
     default=None,
     help="Override batch size for SkySpark operations (overrides job file)",
 )
-@click.pass_obj
+@click.pass_context
 def sync(
-    config: Config,
+    ctx: click.Context,
     job_file: str | None,
     site: str | None,
     dry_run: bool,
@@ -196,6 +303,9 @@ def sync(
     if not logger:
         click.echo("Logger not initialized", err=True)
         sys.exit(1)
+
+    # Merge credentials from CLI args, job file, and env vars
+    config = merge_credentials_and_create_config(ctx, job_file)
 
     # Load job file if provided and merge with CLI args (CLI takes precedence)
     if job_file:
@@ -316,17 +426,25 @@ async def _run_sync(
 
 @cli.command()
 @click.option(
+    "--job-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to job configuration file (YAML/JSON)",
+)
+@click.option(
     "--site",
     required=False,
-    help="Optional site filter (only sync refs for points from this site)",
+    help="Optional site filter (overrides job file)",
 )
 @click.option(
     "--dry-run",
     is_flag=True,
-    help="Perform a dry run without making changes",
+    help="Perform a dry run without making changes (overrides job file)",
 )
-@click.pass_obj
-def sync_refs_from_skyspark(config: Config, site: str | None, dry_run: bool) -> None:
+@click.pass_context
+def sync_refs_from_skyspark(
+    ctx: click.Context, job_file: str | None, site: str | None, dry_run: bool
+) -> None:
     """Sync refs from SkySpark back to ACE FlightDeck.
 
     This command:
@@ -339,12 +457,42 @@ def sync_refs_from_skyspark(config: Config, site: str | None, dry_run: bool) -> 
         ace-skyspark-cli sync-refs-from-skyspark
         ace-skyspark-cli sync-refs-from-skyspark --site "Building A"
         ace-skyspark-cli sync-refs-from-skyspark --dry-run
+        ace-skyspark-cli sync-refs-from-skyspark --job-file sync-refs-job.yaml
     """
     if not logger:
         click.echo("Logger not initialized", err=True)
         sys.exit(1)
 
-    logger.info("sync_refs_from_skyspark_start", site=site, dry_run=dry_run)
+    # Merge credentials from CLI args, job file, and env vars
+    config = merge_credentials_and_create_config(ctx, job_file)
+
+    # Load job file if provided and merge with CLI args (CLI takes precedence)
+    if job_file:
+        from ace_skyspark_cli.job_config import JobFile
+
+        try:
+            job_config_obj = JobFile.from_file(job_file)
+            if not job_config_obj.sync_refs:
+                click.echo(
+                    "Error: Job file does not contain 'sync_refs' configuration", err=True
+                )
+                sys.exit(1)
+
+            job_sync_refs = job_config_obj.sync_refs
+            # CLI args override job file (only if explicitly provided)
+            # Note: Click sets default values even if not provided, so we check carefully
+            if site is None and job_sync_refs.site is not None:
+                site = job_sync_refs.site
+            dry_run = dry_run or job_sync_refs.dry_run
+
+            logger.info("job_file_loaded", path=job_file)
+        except Exception as e:
+            click.echo(f"Error loading job file: {e}", err=True)
+            sys.exit(1)
+
+    logger.info(
+        "sync_refs_from_skyspark_start", site=site, dry_run=dry_run, job_file=job_file
+    )
 
     try:
         # Run async sync operation
@@ -658,28 +806,35 @@ async def _run_check_timezones(
 
 
 @cli.command()
-@click.option("--site", required=True, help="Site name to write history for")
+@click.option(
+    "--job-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to job configuration file (YAML/JSON)",
+)
+@click.option("--site", required=False, help="Site name to write history for (overrides job file)")
 @click.option(
     "--start",
-    required=True,
-    help="Start time (ISO format: 2025-11-01T00:00:00Z or 2025-11-01)",
+    required=False,
+    help="Start time (ISO format: 2025-11-01T00:00:00Z or 2025-11-01) (overrides job file)",
 )
 @click.option(
     "--end",
-    required=True,
-    help="End time (ISO format: 2025-11-01T23:59:59Z or 2025-11-01)",
+    required=False,
+    help="End time (ISO format: 2025-11-01T23:59:59Z or 2025-11-01) (overrides job file)",
 )
-@click.option("--limit", type=int, default=None, help="Limit number of points to process")
-@click.option("--chunk-size", type=int, default=1000, help="Number of samples per write chunk (default: 1000)")
-@click.option("--dry-run", is_flag=True, help="Show what would be written without writing")
-@click.pass_obj
+@click.option("--limit", type=int, default=None, help="Limit number of points to process (overrides job file)")
+@click.option("--chunk-size", type=int, default=None, help="Number of samples per write chunk (overrides job file)")
+@click.option("--dry-run", is_flag=True, help="Show what would be written without writing (overrides job file)")
+@click.pass_context
 def write_history(
-    config: Config,
-    site: str,
-    start: str,
-    end: str,
+    ctx: click.Context,
+    job_file: str | None,
+    site: str | None,
+    start: str | None,
+    end: str | None,
     limit: int | None,
-    chunk_size: int,
+    chunk_size: int | None,
     dry_run: bool,
 ) -> None:
     """Write historical timeseries data from ACE to SkySpark.
@@ -695,10 +850,55 @@ def write_history(
         ace-skyspark-cli write-history --site "Building A" --start 2025-11-01T00:00:00Z --end 2025-11-01T23:59:59Z
         ace-skyspark-cli write-history --site "Building A" --start 2025-11-01 --end 2025-11-02 --limit 10
         ace-skyspark-cli write-history --site "Building A" --start 2025-11-01 --end 2025-11-02 --dry-run
+        ace-skyspark-cli write-history --job-file history-job.yaml
     """
     if not logger:
         click.echo("Logger not initialized", err=True)
         sys.exit(1)
+
+    # Merge credentials from CLI args, job file, and env vars
+    config = merge_credentials_and_create_config(ctx, job_file)
+
+    # Load job file if provided and merge with CLI args (CLI takes precedence)
+    if job_file:
+        from ace_skyspark_cli.job_config import JobFile
+
+        try:
+            job_config_obj = JobFile.from_file(job_file)
+            if not job_config_obj.write_history:
+                click.echo(
+                    "Error: Job file does not contain 'write_history' configuration", err=True
+                )
+                sys.exit(1)
+
+            job_wh = job_config_obj.write_history
+            # CLI args override job file (only if explicitly provided)
+            site = site or job_wh.site
+            start = start or job_wh.start
+            end = end or job_wh.end
+            limit = limit if limit is not None else job_wh.limit
+            chunk_size = chunk_size if chunk_size is not None else job_wh.chunk_size
+            dry_run = dry_run or job_wh.dry_run
+
+            logger.info("job_file_loaded", path=job_file)
+        except Exception as e:
+            click.echo(f"Error loading job file: {e}", err=True)
+            sys.exit(1)
+
+    # Validate required parameters
+    if not site:
+        click.echo("Error: --site is required (or provide via job file)", err=True)
+        sys.exit(1)
+    if not start:
+        click.echo("Error: --start is required (or provide via job file)", err=True)
+        sys.exit(1)
+    if not end:
+        click.echo("Error: --end is required (or provide via job file)", err=True)
+        sys.exit(1)
+
+    # Set default chunk_size if not provided
+    if chunk_size is None:
+        chunk_size = 1000
 
     logger.info(
         "write_history_command_start",
@@ -722,8 +922,8 @@ def write_history(
 
 
 @cli.command()
-@click.pass_obj
-def debug_project_tz(config: Config) -> None:
+@click.pass_context
+def debug_project_tz(ctx: click.Context) -> None:
     """Debug project timezone detection.
 
     Shows what the about endpoint returns and what the project entity's tz tag is.
@@ -735,6 +935,7 @@ def debug_project_tz(config: Config) -> None:
         click.echo("Logger not initialized", err=True)
         sys.exit(1)
 
+    config = merge_credentials_and_create_config(ctx, job_file=None)
     logger.info("debug_project_tz_start")
 
     try:
@@ -749,22 +950,30 @@ def debug_project_tz(config: Config) -> None:
 
 @cli.command()
 @click.option(
+    "--job-file",
+    type=click.Path(exists=True),
+    default=None,
+    help="Path to job configuration file (YAML/JSON)",
+)
+@click.option(
     "--site",
     required=False,
-    help="Check specific site (default: check all sites)",
+    help="Check specific site (overrides job file)",
 )
 @click.option(
     "--fix",
     is_flag=True,
-    help="Fix timezone inconsistencies by updating points",
+    help="Fix timezone inconsistencies by updating points (overrides job file)",
 )
 @click.option(
     "--dry-run",
     is_flag=True,
-    help="Show what would be fixed without making changes",
+    help="Show what would be fixed without making changes (overrides job file)",
 )
-@click.pass_obj
-def check_timezones(config: Config, site: str | None, fix: bool, dry_run: bool) -> None:
+@click.pass_context
+def check_timezones(
+    ctx: click.Context, job_file: str | None, site: str | None, fix: bool, dry_run: bool
+) -> None:
     """Check for timezone inconsistencies in SkySpark points.
 
     This command:
@@ -776,12 +985,42 @@ def check_timezones(config: Config, site: str | None, fix: bool, dry_run: bool) 
     Examples:
         ace-skyspark-cli check-timezones
         ace-skyspark-cli check-timezones --site "Building A"
+        ace-skyspark-cli check-timezones --job-file tz-check-job.yaml
     """
     if not logger:
         click.echo("Logger not initialized", err=True)
         sys.exit(1)
 
-    logger.info("check_timezones_start", site=site, fix=fix, dry_run=dry_run)
+    # Merge credentials from CLI args, job file, and env vars
+    config = merge_credentials_and_create_config(ctx, job_file)
+
+    # Load job file if provided and merge with CLI args (CLI takes precedence)
+    if job_file:
+        from ace_skyspark_cli.job_config import JobFile
+
+        try:
+            job_config_obj = JobFile.from_file(job_file)
+            if not job_config_obj.check_timezones:
+                click.echo(
+                    "Error: Job file does not contain 'check_timezones' configuration", err=True
+                )
+                sys.exit(1)
+
+            job_ct = job_config_obj.check_timezones
+            # CLI args override job file (only if explicitly provided)
+            if site is None and job_ct.site is not None:
+                site = job_ct.site
+            fix = fix or job_ct.fix
+            dry_run = dry_run or job_ct.dry_run
+
+            logger.info("job_file_loaded", path=job_file)
+        except Exception as e:
+            click.echo(f"Error loading job file: {e}", err=True)
+            sys.exit(1)
+
+    logger.info(
+        "check_timezones_start", site=site, fix=fix, dry_run=dry_run, job_file=job_file
+    )
 
     try:
         asyncio.run(_run_check_timezones(config, site, fix, dry_run))
@@ -794,9 +1033,10 @@ def check_timezones(config: Config, site: str | None, fix: bool, dry_run: bool) 
 
 
 @cli.command()
-@click.pass_obj
-def version(config: Config) -> None:
+@click.pass_context
+def version(ctx: click.Context) -> None:
     """Display version information."""
+    config = merge_credentials_and_create_config(ctx, job_file=None)
     click.echo(f"ACE SkySpark CLI v{__version__}")
     click.echo("\nConfiguration:")
     click.echo(f"  FlightDeck URL: {config.flightdeck.api_url}")

@@ -115,25 +115,64 @@ class AppConfig(BaseSettings):
 class Config:
     """Main configuration class combining all settings."""
 
-    def __init__(self) -> None:
-        """Initialize configuration from environment variables."""
+    def __init__(self, overrides: dict[str, Any] | None = None) -> None:
+        """Initialize configuration from environment variables.
+
+        Args:
+            overrides: Optional dictionary of configuration overrides
+        """
         self.flightdeck = FlightDeckConfig()
         self.skyspark = SkySparkConfig()
         self.app = AppConfig()
 
+        # Apply overrides if provided
+        if overrides:
+            self.apply_overrides(overrides)
+
+    def apply_overrides(self, overrides: dict[str, Any]) -> None:
+        """Apply configuration overrides from job file or CLI args.
+
+        Args:
+            overrides: Dictionary with credential overrides
+        """
+        # FlightDeck overrides
+        if "flightdeck_api_url" in overrides and overrides["flightdeck_api_url"]:
+            self.flightdeck.api_url = overrides["flightdeck_api_url"]
+        if "flightdeck_jwt" in overrides and overrides["flightdeck_jwt"]:
+            self.flightdeck.jwt = overrides["flightdeck_jwt"]
+        if "flightdeck_timeout" in overrides and overrides["flightdeck_timeout"]:
+            self.flightdeck.timeout = overrides["flightdeck_timeout"]
+
+        # SkySpark overrides
+        if "skyspark_url" in overrides and overrides["skyspark_url"]:
+            self.skyspark.url = overrides["skyspark_url"]
+        if "skyspark_project" in overrides and overrides["skyspark_project"]:
+            self.skyspark.project = overrides["skyspark_project"]
+        if "skyspark_user" in overrides and overrides["skyspark_user"]:
+            self.skyspark.user = overrides["skyspark_user"]
+        if "skyspark_password" in overrides and overrides["skyspark_password"]:
+            self.skyspark.password = overrides["skyspark_password"]
+        if "skyspark_timeout" in overrides and overrides["skyspark_timeout"]:
+            self.skyspark.timeout = overrides["skyspark_timeout"]
+        if "skyspark_max_retries" in overrides and overrides["skyspark_max_retries"]:
+            self.skyspark.max_retries = overrides["skyspark_max_retries"]
+        if "skyspark_pool_size" in overrides and overrides["skyspark_pool_size"]:
+            self.skyspark.pool_size = overrides["skyspark_pool_size"]
+
     @classmethod
-    def from_env(cls, env_file: str | None = None) -> "Config":
+    def from_env(cls, env_file: str | None = None, overrides: dict[str, Any] | None = None) -> "Config":
         """Load configuration from environment.
 
         Args:
             env_file: Optional path to .env file
+            overrides: Optional dictionary of configuration overrides
 
         Returns:
             Configured Config instance
         """
         if env_file:
             os.environ["ENV_FILE"] = env_file
-        return cls()
+        return cls(overrides=overrides)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert configuration to dictionary.

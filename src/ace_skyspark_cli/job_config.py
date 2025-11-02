@@ -15,6 +15,28 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 
+class CredentialsConfig(BaseModel):
+    """Configuration for FlightDeck and SkySpark credentials."""
+
+    # FlightDeck credentials
+    flightdeck_api_url: str | None = Field(
+        default=None, description="FlightDeck API base URL"
+    )
+    flightdeck_jwt: str | None = Field(default=None, description="FlightDeck JWT authentication token")
+
+    # SkySpark credentials
+    skyspark_url: str | None = Field(default=None, description="SkySpark server URL")
+    skyspark_project: str | None = Field(default=None, description="SkySpark project name")
+    skyspark_user: str | None = Field(default=None, description="SkySpark username")
+    skyspark_password: str | None = Field(default=None, description="SkySpark password")
+
+    # Optional overrides for advanced settings
+    skyspark_timeout: float | None = Field(default=None, description="SkySpark timeout in seconds")
+    skyspark_max_retries: int | None = Field(default=None, description="SkySpark max retries")
+    skyspark_pool_size: int | None = Field(default=None, description="SkySpark connection pool size")
+    flightdeck_timeout: int | None = Field(default=None, description="FlightDeck timeout in seconds")
+
+
 class SyncJobConfig(BaseModel):
     """Configuration for sync command."""
 
@@ -99,6 +121,9 @@ class CheckTimezonesJobConfig(BaseModel):
 class JobFile(BaseModel):
     """Job file containing multiple job configurations."""
 
+    credentials: CredentialsConfig | None = Field(
+        default=None, description="Shared credentials for all commands"
+    )
     sync: SyncJobConfig | None = Field(default=None, description="Sync job configuration")
     sync_refs: SyncRefsJobConfig | None = Field(
         default=None, description="Sync refs job configuration"
@@ -171,13 +196,14 @@ def generate_sync_template() -> dict[str, Any]:
         Dictionary with sync job template
     """
     return {
+        **generate_credentials_template(),
         "sync": {
             "site": "my-site-name",
             "dry_run": False,
             "limit": None,
             "sync_all": False,
             "batch_size": None,
-        }
+        },
     }
 
 
@@ -187,7 +213,10 @@ def generate_sync_refs_template() -> dict[str, Any]:
     Returns:
         Dictionary with sync-refs job template
     """
-    return {"sync_refs": {"site": None, "dry_run": False}}
+    return {
+        **generate_credentials_template(),
+        "sync_refs": {"site": None, "dry_run": False},
+    }
 
 
 def generate_write_history_template() -> dict[str, Any]:
@@ -197,6 +226,7 @@ def generate_write_history_template() -> dict[str, Any]:
         Dictionary with write-history job template
     """
     return {
+        **generate_credentials_template(),
         "write_history": {
             "site": "my-site-name",
             "start": "2025-11-01T00:00:00Z",
@@ -204,7 +234,7 @@ def generate_write_history_template() -> dict[str, Any]:
             "limit": None,
             "chunk_size": 1000,
             "dry_run": False,
-        }
+        },
     }
 
 
@@ -214,7 +244,33 @@ def generate_check_timezones_template() -> dict[str, Any]:
     Returns:
         Dictionary with check-timezones job template
     """
-    return {"check_timezones": {"site": None, "fix": False, "dry_run": False}}
+    return {
+        **generate_credentials_template(),
+        "check_timezones": {"site": None, "fix": False, "dry_run": False},
+    }
+
+
+def generate_credentials_template() -> dict[str, Any]:
+    """Generate template for credentials configuration.
+
+    Returns:
+        Dictionary with credentials template
+    """
+    return {
+        "credentials": {
+            "flightdeck_api_url": "https://flightdeck.aceiot.cloud/api",
+            "flightdeck_jwt": "your-jwt-token",
+            "skyspark_url": "http://localhost:8080/api",
+            "skyspark_project": "myProject",
+            "skyspark_user": "admin",
+            "skyspark_password": "secret",
+            # Optional advanced settings (uncomment to override defaults)
+            # "skyspark_timeout": 30.0,
+            # "skyspark_max_retries": 3,
+            # "skyspark_pool_size": 10,
+            # "flightdeck_timeout": 30,
+        }
+    }
 
 
 def generate_full_template() -> dict[str, Any]:
@@ -224,6 +280,7 @@ def generate_full_template() -> dict[str, Any]:
         Dictionary with all job templates
     """
     return {
+        **generate_credentials_template(),
         **generate_sync_template(),
         **generate_sync_refs_template(),
         **generate_write_history_template(),

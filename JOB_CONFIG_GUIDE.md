@@ -56,6 +56,16 @@ ace-skyspark-cli generate-job-template --format json --output job-config.json
 ### Complete Example (YAML)
 
 ```yaml
+# Credentials (optional - can also be provided via CLI args or environment variables)
+credentials:
+  flightdeck_api_url: https://flightdeck.aceiot.cloud/api
+  flightdeck_jwt: your-jwt-token
+  skyspark_url: http://localhost:8080/api
+  skyspark_project: myProject
+  skyspark_user: admin
+  skyspark_password: secret
+
+# Command configurations
 sync:
   site: my-site-name
   dry_run: false
@@ -85,6 +95,14 @@ check_timezones:
 
 ```json
 {
+  "credentials": {
+    "flightdeck_api_url": "https://flightdeck.aceiot.cloud/api",
+    "flightdeck_jwt": "your-jwt-token",
+    "skyspark_url": "http://localhost:8080/api",
+    "skyspark_project": "myProject",
+    "skyspark_user": "admin",
+    "skyspark_password": "secret"
+  },
   "sync": {
     "site": "my-site-name",
     "dry_run": false,
@@ -101,6 +119,118 @@ check_timezones:
     "dry_run": false
   }
 }
+```
+
+## Credentials Configuration
+
+### Overview
+
+Credentials can be provided through three methods (in order of precedence):
+
+1. **CLI Arguments** - Using global flags like `--flightdeck-jwt`, `--skyspark-user`, etc.
+2. **Job File** - In the `credentials` section
+3. **Environment Variables** - From `.env` file or system environment
+
+### Available Credential Options
+
+#### FlightDeck Credentials
+- `flightdeck_api_url` - FlightDeck API URL (default: https://flightdeck.aceiot.cloud/api)
+- `flightdeck_jwt` - JWT authentication token (required)
+
+#### SkySpark Credentials
+- `skyspark_url` - SkySpark server URL (required)
+- `skyspark_project` - Project name (required)
+- `skyspark_user` - Username (required)
+- `skyspark_password` - Password (required)
+- `skyspark_timeout` - Request timeout in seconds (optional, default: 30.0)
+- `skyspark_max_retries` - Maximum retry attempts (optional, default: 3)
+- `skyspark_pool_size` - Connection pool size (optional, default: 10)
+
+### Using CLI Arguments
+
+Override credentials from environment or job file using global CLI flags:
+
+```bash
+# Override FlightDeck JWT
+ace-skyspark-cli --flightdeck-jwt "new-token" sync --site "Building A"
+
+# Override SkySpark credentials
+ace-skyspark-cli --skyspark-url "http://prod:8080/api" \
+                 --skyspark-user "prod-user" \
+                 --skyspark-password "prod-pass" \
+                 sync --site "Building A"
+
+# Override multiple credentials
+ace-skyspark-cli --flightdeck-jwt "new-jwt" \
+                 --skyspark-project "production" \
+                 sync --job-file sync-job.yaml
+```
+
+### Using Job File
+
+Store credentials in the job file (useful for different environments):
+
+```yaml
+# production-job.yaml
+credentials:
+  flightdeck_api_url: https://flightdeck.aceiot.cloud/api
+  flightdeck_jwt: production-jwt-token
+  skyspark_url: http://prod-skyspark:8080/api
+  skyspark_project: productionProject
+  skyspark_user: prod_user
+  skyspark_password: prod_pass
+
+sync:
+  site: production-building
+  dry_run: false
+```
+
+```bash
+ace-skyspark-cli sync --job-file production-job.yaml
+```
+
+### Using Environment Variables
+
+Store credentials in `.env` file (recommended for secrets):
+
+```bash
+# .env
+FLIGHTDECK_JWT=your-jwt-token
+FLIGHTDECK_API_URL=https://flightdeck.aceiot.cloud/api
+SKYSPARK_URL=http://localhost:8080/api
+SKYSPARK_PROJECT=myProject
+SKYSPARK_USER=admin
+SKYSPARK_PASSWORD=secret
+```
+
+Then run commands without specifying credentials:
+
+```bash
+ace-skyspark-cli sync --site "Building A"
+```
+
+### Security Best Practices
+
+1. **Never commit credentials** to version control
+2. **Use environment variables** for sensitive data (JWT tokens, passwords)
+3. **Use job files** for non-sensitive configuration (URLs, project names, command parameters)
+4. **Use CLI arguments** for temporary overrides during testing
+
+Example secure setup:
+
+```yaml
+# job-config.yaml (committed to git)
+# Credentials are NOT included - they come from .env
+sync:
+  site: my-site
+  dry_run: false
+  batch_size: 1000
+```
+
+```bash
+# .env (NOT committed to git, added to .gitignore)
+FLIGHTDECK_JWT=secret-token
+SKYSPARK_PASSWORD=secret-password
 ```
 
 ## Using Job Files
