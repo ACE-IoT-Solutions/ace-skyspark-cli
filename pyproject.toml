@@ -1,6 +1,6 @@
 [project]
 name = "ace-skyspark-cli"
-version = "0.11.2"
+version = "0.11.3"
 description = "CLI tool for synchronizing points, equipment, and entities from ACE FlightDeck to SkySpark"
 readme = "README.md"
 license = { text = "MIT" }
