@@ -137,8 +137,22 @@ class PointSyncService:
             else:
                 result.sites_skipped += 1
 
-            # Fetch points from ACE (configured/collected only unless sync_all=True)
-            ace_points = await self._fetch_ace_points(site_name, configured_only=not sync_all)
+            # Fetch only the relevant SkySpark points for this site. Default sync treats
+            # historized SkySpark points as collection opt-ins, while --sync-all includes all.
+            skyspark_points = await self._fetch_skyspark_points(
+                site_ref=site_ref,
+                historized_only=not sync_all,
+            )
+            logger.info("skyspark_points_fetched", count=len(skyspark_points))
+
+            # Fetch points from ACE. Default sync includes configured FlightDeck points plus
+            # ACE points that correspond to historized SkySpark points.
+            ace_points = await self._fetch_ace_points(
+                site_name,
+                configured_only=not sync_all,
+                skyspark_points=skyspark_points,
+                dry_run=dry_run,
+            )
 
             if not ace_points:
                 if sync_all:
@@ -172,10 +186,6 @@ class PointSyncService:
             result.equipment_created += equip_created_count
             result.equipment_updated += equip_updated_count
             result.equipment_skipped += equip_skipped_count
-
-            # Fetch existing SkySpark points to check for matches
-            skyspark_points = await self._fetch_skyspark_points()
-            logger.info("skyspark_points_fetched", count=len(skyspark_points))
 
             # Build lookup map: haystackRef -> SkySpark point
             skyspark_ref_map = self._build_ref_map(skyspark_points)
@@ -257,13 +267,19 @@ class PointSyncService:
         return result
 
     async def _fetch_ace_points(
-        self, site_name: str, configured_only: bool = True
+        self,
+        site_name: str,
+        configured_only: bool = True,
+        skyspark_points: list[dict[str, Any]] | None = None,
+        dry_run: bool = False,
     ) -> list[dict[str, Any]]:
         """Fetch all points from ACE FlightDeck with pagination.
 
         Args:
             site_name: Site name to filter by
             configured_only: If True, fetch only configured/collected points (default: True)
+            skyspark_points: SkySpark points used to include historized opt-ins
+            dry_run: If True, don't write collection opt-ins back to FlightDeck
 
         Returns:
             List of all ACE point dictionaries (paginated)
@@ -333,21 +349,145 @@ class PointSyncService:
                 )
                 break
 
+        if configured_only and skyspark_points:
+            all_points = await self._include_skyspark_his_points(
+                all_points,
+                skyspark_points,
+                dry_run=dry_run,
+            )
+
         logger.info("ace_points_fetched", site=site_name, count=len(all_points))
         return all_points
 
-    async def _fetch_skyspark_points(self) -> list[dict[str, Any]]:
-        """Fetch all points from SkySpark.
+    async def _fetch_skyspark_points(
+        self,
+        site_ref: str | None = None,
+        historized_only: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Fetch points from SkySpark.
+
+        Args:
+            site_ref: Optional site ID to scope the read
+            historized_only: If True, only fetch points with the his marker
 
         Returns:
             List of SkySpark point dictionaries
         """
-        logger.info("fetching_skyspark_points")
+        logger.info(
+            "fetching_skyspark_points",
+            site_ref=site_ref,
+            historized_only=historized_only,
+        )
         try:
-            return await self.skyspark_client.read_points()
+            return await self.skyspark_client.read_points(
+                site_ref=site_ref,
+                his_only=historized_only,
+            )
         except Exception as e:
             logger.error("skyspark_fetch_failed", error=str(e))
             return []
+
+    async def _include_skyspark_his_points(
+        self,
+        ace_points: list[dict[str, Any]],
+        skyspark_points: list[dict[str, Any]],
+        dry_run: bool = False,
+    ) -> list[dict[str, Any]]:
+        """Include ACE points referenced by historized SkySpark points.
+
+        Default sync should not pull every ACE point for a site. This adds only points that
+        SkySpark has explicitly opted into collection by carrying the his marker.
+        """
+        points_by_name = {str(point.get("name")): point for point in ace_points if point.get("name")}
+        skyspark_point_names = self._get_historized_ace_point_names(skyspark_points)
+        missing_names = sorted(skyspark_point_names - set(points_by_name))
+
+        logger.info(
+            "skyspark_his_point_selection",
+            configured_count=len(ace_points),
+            skyspark_his_count=len(skyspark_point_names),
+            additional_count=len(missing_names),
+        )
+
+        if not missing_names:
+            return ace_points
+
+        loop = asyncio.get_event_loop()
+        additional_points: list[dict[str, Any]] = []
+
+        for point_name in missing_names:
+            try:
+                point = await loop.run_in_executor(None, self.ace_client.get_point, point_name)
+            except Exception as e:
+                logger.warning(
+                    "skyspark_his_ace_point_fetch_failed",
+                    point=point_name,
+                    error=str(e),
+                )
+                continue
+
+            if point and point.get("name"):
+                additional_points.append(point)
+                points_by_name[str(point["name"])] = point
+
+        await self._enable_collection_for_points(additional_points, dry_run=dry_run)
+        return list(points_by_name.values())
+
+    def _get_historized_ace_point_names(self, skyspark_points: list[dict[str, Any]]) -> set[str]:
+        """Extract ACE point names from historized SkySpark points."""
+        point_names: set[str] = set()
+        for point in skyspark_points:
+            if not self._has_marker(point, "his"):
+                continue
+
+            ace_topic = point.get("ace_topic")
+            if not ace_topic:
+                continue
+
+            point_names.add(str(ace_topic))
+
+        return point_names
+
+    async def _enable_collection_for_points(
+        self,
+        ace_points: list[dict[str, Any]],
+        dry_run: bool = False,
+    ) -> None:
+        """Enable FlightDeck collection for points opted in by SkySpark his markers."""
+        points_to_update = []
+        for point in ace_points:
+            if point.get("collect_enabled") is True:
+                continue
+
+            point["collect_enabled"] = True
+            points_to_update.append(point)
+
+        if not points_to_update:
+            return
+
+        logger.info("enabling_flightdeck_collection", count=len(points_to_update), dry_run=dry_run)
+        if dry_run:
+            return
+
+        loop = asyncio.get_event_loop()
+        try:
+            await loop.run_in_executor(
+                None,
+                self.ace_client.create_points,
+                points_to_update,
+                False,
+                False,
+            )
+        except Exception as e:
+            logger.error("enable_flightdeck_collection_failed", error=str(e))
+            raise
+
+    def _has_marker(self, entity: dict[str, Any], marker: str) -> bool:
+        """Return True if an entity has a SkySpark marker tag."""
+        value = entity.get(marker)
+        return value == "m:" or value is True or (
+            isinstance(value, dict) and value.get("_kind") == "marker"
+        )
 
     async def _sync_site(self, site_name: str, dry_run: bool) -> tuple[str | None, bool, str]:
         """Synchronize site entity to SkySpark.
@@ -807,7 +947,7 @@ class PointSyncService:
             equipRef=equip_ref,
             kind="Number",  # TODO: Determine from ace_point data type
             tz=site_tz,  # Use site's timezone
-            his=True,  # All ACE points are historized
+            his=ace_point.get("collect_enabled") is True,
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
         )
@@ -858,6 +998,9 @@ class PointSyncService:
             existing_equip_ref = str(equip_ref_val).lstrip("@")
 
         existing_kind = sky_point.get("kind", "Number")
+        should_historize = ace_point.get("collect_enabled") is True or self._has_marker(
+            sky_point, "his"
+        )
 
         # Determine correct equipment ref and display name from bacnet_data
         equip_ref = existing_equip_ref  # Default to existing
@@ -986,7 +1129,7 @@ class PointSyncService:
             equipRef=equip_ref,
             kind=existing_kind,
             tz=site_tz,  # Use site's timezone
-            his=True,  # All ACE points are historized
+            his=should_historize,
             marker_tags=final_marker_tags,
             kv_tags=final_kv_tags,
         )

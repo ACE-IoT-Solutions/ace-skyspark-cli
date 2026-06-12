@@ -23,7 +23,7 @@ classifiers = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "ace-skyspark-lib>=0.1.10",
+    "ace-skyspark-lib>=0.1.11",
     "aceiot-models>=0.3.4",
     "click>=8.3.0",
     "pydantic>=2.12.3",

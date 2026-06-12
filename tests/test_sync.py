@@ -155,6 +155,29 @@ class TestPointSyncService:
         assert "point" in sky_point.marker_tags
         assert "sensor" in sky_point.marker_tags
         assert "temp" in sky_point.marker_tags
+        assert not sky_point.his
+
+    @pytest.mark.unit
+    def test_prepare_point_create_sets_his_for_collected_point(
+        self, mock_flightdeck_client: MagicMock, mock_skyspark_client: MagicMock
+    ) -> None:
+        """Test new points only receive his when FlightDeck collection is enabled."""
+        config = MagicMock(spec=Config)
+        service = PointSyncService(mock_flightdeck_client, mock_skyspark_client, config)
+
+        ace_point = ACEPoint(
+            name="Temperature Sensor",
+            site_id=1,
+            client_id=1,
+            marker_tags=["sensor", "temp"],
+            collect_enabled=True,
+        ).model_dump()
+
+        sky_point = service._prepare_point_create(
+            ace_point, "@site-123", {}, "America/New_York"
+        )
+
+        assert sky_point.his
 
     @pytest.mark.unit
     def test_prepare_point_update(
@@ -186,6 +209,107 @@ class TestPointSyncService:
         )
         assert sky_point.id == "point-123"
         assert sky_point.dis == "Temperature Sensor Updated"
+        assert not sky_point.his
+
+    @pytest.mark.unit
+    def test_prepare_point_update_preserves_existing_his(
+        self, mock_flightdeck_client: MagicMock, mock_skyspark_client: MagicMock
+    ) -> None:
+        """Test updates preserve existing SkySpark his markers."""
+        config = MagicMock(spec=Config)
+        service = PointSyncService(mock_flightdeck_client, mock_skyspark_client, config)
+
+        ace_point = ACEPoint(
+            name="Temperature Sensor Updated",
+            site_id=1,
+            client_id=1,
+            marker_tags=["sensor", "temp"],
+            collect_enabled=False,
+        ).model_dump()
+
+        existing_sky_point = {
+            "id": {"val": "@point-123"},
+            "dis": "Temperature Sensor",
+            "his": {"_kind": "marker"},
+        }
+
+        sky_point = service._prepare_point_update(
+            ace_point, existing_sky_point, "@site-123", {}, "America/New_York"
+        )
+
+        assert sky_point.his
+
+    @pytest.mark.unit
+    def test_get_historized_ace_point_names(
+        self, mock_flightdeck_client: MagicMock, mock_skyspark_client: MagicMock
+    ) -> None:
+        """Test only historized SkySpark points are treated as collection opt-ins."""
+        config = MagicMock(spec=Config)
+        service = PointSyncService(mock_flightdeck_client, mock_skyspark_client, config)
+
+        names = service._get_historized_ace_point_names(
+            [
+                {"ace_topic": "collected-by-marker", "his": "m:"},
+                {"ace_topic": "collected-by-dict", "his": {"_kind": "marker"}},
+                {"ace_topic": "not-collected"},
+                {"his": "m:"},
+            ]
+        )
+
+        assert names == {"collected-by-marker", "collected-by-dict"}
+
+    @pytest.mark.unit
+    @pytest.mark.asyncio
+    async def test_include_skyspark_his_points_enables_collection(
+        self, mock_skyspark_client: MagicMock
+    ) -> None:
+        """Test historized SkySpark points add only named ACE points and enable collection."""
+
+        class FlightDeckClient:
+            def __init__(self) -> None:
+                self.created_points: list[dict[str, object]] | None = None
+
+            def get_point(self, point_name: str) -> dict[str, object]:
+                return {
+                    "name": point_name,
+                    "site_id": 1,
+                    "client_id": 1,
+                    "collect_enabled": False,
+                }
+
+            def create_points(
+                self,
+                points: list[dict[str, object]],
+                overwrite_m_tags: bool = False,
+                overwrite_kv_tags: bool = False,
+            ) -> dict[str, object]:
+                assert overwrite_m_tags is False
+                assert overwrite_kv_tags is False
+                self.created_points = points
+                return {"items": points}
+
+        flightdeck_client = FlightDeckClient()
+        config = MagicMock(spec=Config)
+        service = PointSyncService(flightdeck_client, mock_skyspark_client, config)
+
+        points = await service._include_skyspark_his_points(
+            [{"name": "configured", "collect_enabled": True}],
+            [
+                {"ace_topic": "configured", "his": "m:"},
+                {"ace_topic": "skyspark-opt-in", "his": "m:"},
+                {"ace_topic": "not-historized"},
+            ],
+        )
+
+        assert {point["name"] for point in points} == {"configured", "skyspark-opt-in"}
+        assert flightdeck_client.created_points == [
+            {
+                "name": "skyspark-opt-in",
+                "site_id": 1,
+                "client_id": 1,
+                "collect_enabled": True,
+            }
+        ]
 
     @pytest.mark.unit
     @pytest.mark.asyncio
