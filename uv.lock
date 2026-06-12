@@ -4,7 +4,7 @@ requires-python = ">=3.12"
 
 [[package]]
 name = "ace-skyspark-cli"
-version = "0.12.2"
+version = "0.12.3"
 source = { editable = "." }
 dependencies = [
     { name = "ace-skyspark-lib" },
@@ -30,7 +30,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ace-skyspark-lib", specifier = ">=0.1.12" },
+    { name = "ace-skyspark-lib", specifier = ">=0.1.13" },
     { name = "aceiot-models", specifier = ">=0.3.4" },
     { name = "click", specifier = ">=8.3.0" },
     { name = "pydantic", specifier = ">=2.12.3" },
@@ -53,7 +53,7 @@ dev = [
 
 [[package]]
 name = "ace-skyspark-lib"
-version = "0.1.12"
+version = "0.1.13"
 source = { registry = "https://ace-pypi.tail8c70f.ts.net/simple" }
 dependencies = [
     { name = "aceiot-models" },
@@ -65,9 +65,9 @@ dependencies = [
     { name = "structlog" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://ace-pypi.tail8c70f.ts.net/packages/ace_skyspark_lib-0.1.12.tar.gz", hash = "md5:495f10cfa1cdd0a3f283e8b6e017b358" }
+sdist = { url = "https://ace-pypi.tail8c70f.ts.net/packages/ace_skyspark_lib-0.1.13.tar.gz", hash = "md5:c1314bb2763ab14fefaef4e8a5b8db8d" }
 wheels = [
-    { url = "https://ace-pypi.tail8c70f.ts.net/packages/ace_skyspark_lib-0.1.12-py3-none-any.whl", hash = "md5:d8cd92e650e4db48c26a00e114c78bbf" },
+    { url = "https://ace-pypi.tail8c70f.ts.net/packages/ace_skyspark_lib-0.1.13-py3-none-any.whl", hash = "md5:7af12ddf1f78718713a0dd9162ceeef3" },
 ]
 
 [[package]]
